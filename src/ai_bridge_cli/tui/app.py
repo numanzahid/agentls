@@ -145,19 +145,19 @@ class SessionBrowser(App):
             self.set_interval(AUTO_REFRESH_SECONDS, self._auto_refresh)
 
     def on_resize(self) -> None:
-        self._apply_tier()
+        # App/screen geometry is updated after the resize event is dispatched.
+        self.call_after_refresh(self._apply_tier)
 
     def _apply_tier(self, force: bool = False) -> None:
         width = self.size.width
         tier = "wide" if width >= WIDE else "medium" if width >= MEDIUM else "narrow"
-        if tier == self.tier and not force:
-            self._layout_side()
-            return
+        changed = tier != self.tier
         self.tier = tier
         self.set_class(tier == "narrow", "narrow")
         self.set_class(tier == "medium", "medium")
         # Side pane: beside the table when wide; otherwise toggled to a full view.
-        self.details_open = tier == "wide"
+        if changed or force:
+            self.details_open = tier == "wide"
         self._layout_side()
         if self.loaded:
             self._rebuild_table()
@@ -232,21 +232,22 @@ class SessionBrowser(App):
 
     # -- table --------------------------------------------------------------
     def _columns(self) -> list[tuple[str, str, int | None]]:
-        width = max(40, self._q("#body").size.width or self.size.width)
-        if self.tier == "wide":
-            width = int(width * 0.62)
-        if self.tier == "narrow":
-            fixed = [("mark", " ", 1), ("agent", "Ag", 2), ("status", "St", 2), ("updated", "Updated", 8)]
-        elif self.tier == "medium":
-            fixed = [("mark", " ", 1), ("agent", "Agent", 6), ("origin", "Origin", 7), ("status", "Status", 9),
-                     ("updated", "Updated", 8)]
-        else:
-            fixed = [("mark", " ", 1), ("agent", "Agent", 6), ("origin", "Origin", 7), ("status", "Status", 9),
-                     ("updated", "Updated", 8), ("project", "Project", 22)]
-        used = sum(w + 2 for _, _, w in fixed) + 2
-        title = max(16, width - used - 2)
-        cols = fixed[:]
-        cols.insert(len(cols) - (1 if self.tier == "wide" else 0), ("title", "Title", title))
+        width = self.size.width
+        if self.tier == "wide" and self.details_open:
+            width -= max(40, int(width * 0.38))
+        # Keep the title and model before secondary metadata. Reserve the gutter
+        # and padding explicitly so the title never falls off-screen.
+        compact = self.tier == "narrow"
+        cols = [("mark", " ", 1), ("agent", "Ag" if compact else "Agent", 2 if compact else 6)]
+        model_width = min(28, max(10, width // 5))
+        cols += [("title", "Title", 0), ("model", "Last Model", model_width)]
+        for column in [("updated", "Updated", 8), ("status", "Status", 9),
+                       ("origin", "Origin", 7), ("project", "Project", 22)]:
+            used = sum(c[2] + 2 for c in cols) + column[2] + 2 + 2
+            if width - used >= 20:
+                cols.append(column)
+        used = sum(c[2] + 2 for c in cols) + 2
+        cols[2] = ("title", "Title", max(1, width - used))
         return cols
 
     def _cell(self, s: Session, column: str, now: float):
@@ -263,6 +264,8 @@ class SessionBrowser(App):
             return Text(STATUS_ICON.get(s.status, "?") if self.tier == "narrow" else s.status, style=style)
         if column == "updated":
             return Text(relative(s.updated, now).replace(" ago", ""), style="dim" if s.status == "idle" else "")
+        if column == "model":
+            return Text(safe(s.last_used_model or "—"), overflow="ellipsis", no_wrap=True)
         if column == "project":
             return Text(one_line(home_short(s.cwd), 200), style="dim", overflow="ellipsis", no_wrap=True)
         tags = []
@@ -458,7 +461,7 @@ class SessionBrowser(App):
             ("Updated", Text(f"{stamp(s.updated)}  ({relative(s.updated)})")),
             ("Created", Text(stamp(s.created))) if s.created else None,
             ("Mode", Text(f"{s.mode} / {s.session_type}" + (f" / {s.native_source}" if s.native_source else ""))),
-            ("Model", Text(safe(s.last_used_model))) if s.last_used_model else None,
+            ("Last Model", Text(safe(s.last_used_model or "—"))),
             ("Parent", Text(s.parent_session_id)) if s.parent_session_id else None,
             ("Resumable", Text("yes", style="green") if s.resumable else
              Text.assemble(("no", "red"), (f"  {s.resume_note or ''}", "dim"))),
@@ -565,6 +568,7 @@ class SessionBrowser(App):
     def action_toggle_details(self) -> None:
         self.details_open = not self.details_open
         self._layout_side()
+        self._rebuild_table()
         (self._q("#side") if self.details_open and self.tier != "wide"
          else self._q("#table", DataTable)).focus()
         self._schedule_preview()

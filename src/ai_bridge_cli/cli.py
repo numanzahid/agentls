@@ -88,7 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     sa.add_parser("browse", help="open the interactive session browser (TUI)")
 
     ls = sa.add_parser("list", help="list sessions with filters",
-                       description="List sessions. Archived (hidden) sessions are excluded unless requested.")
+                       description="List sessions. JSON last_used_model is the last known native model, never "
+                                   "a configured default (null if unknown). Archived sessions are excluded "
+                                   "unless requested.")
     ls.add_argument("--agent", action="append", choices=paths.AGENTS, help="repeatable")
     ls.add_argument("--origin", choices=("mcp", "direct", "unknown"),
                     help="mcp = verified bridge provenance record; direct = none; unknown = unverifiable")

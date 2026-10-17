@@ -90,6 +90,47 @@ def tail_jsonl(path: Path, max_bytes: int = TAIL_BYTES) -> list[dict]:
     return out
 
 
+def reverse_jsonl(path: Path):
+    """Read newest records first, including models outside the tail window.
+
+    Memory is bounded by MAX_LINE plus one chunk; oversized records are skipped.
+    Stop consuming as soon as the desired metadata is found.
+    """
+    try:
+        fd, info = open_regular(path)
+    except FileNotFoundError:
+        return
+    with os.fdopen(fd, "rb") as stream:
+        offset, pending, skipping = info.st_size, b"", False
+        while offset:
+            size = min(offset, TAIL_BYTES)
+            offset -= size
+            stream.seek(offset)
+            parts = (stream.read(size) + pending).split(b"\n")
+            pending = parts.pop(0)
+            if skipping and parts:
+                parts.pop()  # remainder of an oversized record
+                skipping = False
+            for raw in reversed(parts):
+                if len(raw) > MAX_LINE:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if isinstance(obj, dict):
+                    yield obj
+            if skipping or len(pending) > MAX_LINE:
+                pending, skipping = b"", True
+        if pending and not skipping:
+            try:
+                obj = json.loads(pending)
+            except (ValueError, UnicodeDecodeError):
+                return
+            if isinstance(obj, dict):
+                yield obj
+
+
 def read_json_file(path: Path, max_bytes: int = 65536):
     """Small JSON side files (meta.json, registries): bounded, regular, no-follow."""
     return json.loads(read_regular(path, max_bytes))

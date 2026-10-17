@@ -112,3 +112,82 @@ def test_duplicate_ids_are_ambiguous(env):
     fixtures.claude_session(env.claude, CLAUDE_ID, env.root, sidecar=False)
     rows = [s for s in Scanner().scan().sessions if s.agent == "claude"]
     assert len(rows) == 2 and all(r.error and not r.resumable for r in rows)
+
+
+def test_claude_latest_real_model_skips_synthetic_and_sidechain(env):
+    path = fixtures.claude_session(env.claude, CLAUDE_ID, env.project)
+    with path.open('a') as stream:
+        import json
+        for row in [
+            {"type": "assistant", "message": {"model": "claude-new"}},
+            {"type": "assistant", "message": {"model": "<synthetic>"}},
+            {"type": "assistant", "message": {"model": "side-model"}, "isSidechain": True},
+            {"type": "assistant", "message": {"model": None}},
+            {"type": "user", "model": "configured-only"},
+        ]:
+            stream.write(json.dumps(row) + '\n')
+    assert by_agent(Scanner().scan(), "claude")[CLAUDE_ID].last_used_model == "claude-new"
+
+
+def test_codex_latest_known_turn_model_survives_missing_context(env):
+    import json
+    path = fixtures.codex_session(env.codex, CODEX_ID, env.project)
+    with path.open('a') as stream:
+        for payload in [{"model": "gpt-new"}, {"model": "<synthetic>"}, {}, {"model": 123}]:
+            stream.write(json.dumps({"type": "turn_context", "payload": payload}) + '\n')
+        stream.write(json.dumps({"type": "session_meta", "payload": {"model": "configured-only"}}) + '\n')
+    assert by_agent(Scanner().scan(), "codex")[CODEX_ID].last_used_model == "gpt-new"
+
+
+def test_models_before_large_tool_output_are_found(env):
+    paths = [fixtures.claude_session(env.claude, CLAUDE_ID, env.project),
+             fixtures.codex_session(env.codex, CODEX_ID, env.project)]
+    for path in paths:
+        with path.open('a') as stream:
+            stream.write('{"type":"tool_result","output":"' + 'x' * 300_000 + '"}\n')
+    result = Scanner().scan()
+    assert by_agent(result, "claude")[CLAUDE_ID].last_used_model == "claude-test-1"
+    assert by_agent(result, "codex")[CODEX_ID].last_used_model == "gpt-test"
+
+
+def test_missing_models_never_use_agent_defaults(env):
+    import json
+    path = fixtures.claude_session(env.claude, CLAUDE_ID, env.project, model="<synthetic>")
+    assert path.exists()
+    path = fixtures.codex_session(env.codex, CODEX_ID, env.project)
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    fixtures.write_jsonl(path, [r for r in rows if r.get("type") != "turn_context"])
+    fixtures.cursor_session(env.cursor, CURSOR_ID, env.project)
+    (env.claude / "settings.json").write_text(json.dumps({"model": "claude-default"}))
+    (env.codex / "config.toml").write_text('model = "codex-default"\n')
+    (env.cursor / "cli-config.json").write_text(json.dumps({"model": "cursor-default"}))
+    rows = Scanner().scan().sessions
+    assert len(rows) == 3
+    assert all(s.last_used_model is None and s.to_json()["last_used_model"] is None for s in rows)
+
+
+def test_cursor_last_used_metadata_not_selected_default(env):
+    import json
+    db = fixtures.cursor_session(env.cursor, CURSOR_ID, env.project, model="cursor-used-model")
+    with sqlite3.connect(db) as con:
+        meta = json.loads(bytes.fromhex(con.execute("select value from meta where key='0'").fetchone()[0]))
+        meta["model"] = "cursor-selected-only"
+        con.execute("update meta set value=? where key='0'", (json.dumps(meta).encode().hex(),))
+    before = db.read_bytes()
+    session = by_agent(Scanner().scan(), "cursor")[CURSOR_ID]
+    assert session.last_used_model == "cursor-used-model"
+    assert db.read_bytes() == before
+
+
+def test_reverse_jsonl_chunk_boundaries_and_oversized_records(tmp_path, monkeypatch):
+    from ai_bridge_cli.scanners import common
+    monkeypatch.setattr(common, "TAIL_BYTES", 32)
+    monkeypatch.setattr(common, "MAX_LINE", 80)
+    path = fixtures.write_jsonl(tmp_path / "test.jsonl", [
+        {"model": "first"}, {"text": "x" * 100}, {"model": "last"},
+    ])
+    with path.open('ab') as stream:
+        stream.write(b'{"model":"unterminated"}')
+    assert list(common.reverse_jsonl(path)) == [
+        {"model": "unterminated"}, {"model": "last"}, {"model": "first"},
+    ]

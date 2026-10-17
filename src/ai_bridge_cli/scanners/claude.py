@@ -12,7 +12,7 @@ from pathlib import Path
 from .. import paths
 from ..model import Session
 from ..textsafe import is_uuid
-from .common import HEAD_BYTES, blocks_text, is_noise, iter_jsonl, model_name, tail_jsonl
+from .common import HEAD_BYTES, blocks_text, is_noise, iter_jsonl, model_name, reverse_jsonl, tail_jsonl
 
 HEAD_LINES = 400
 
@@ -81,15 +81,21 @@ def parse(path: Path, root: Path, info: os.stat_result) -> Session:
             first = user_text(entry)
         if entry.get("type") in ("user", "assistant"):
             count += 1
-    # A /rename and the latest model live near the end of long transcripts.
-    model = renamed = None
+    # Renames are cosmetic and bounded to the tail; model lookup continues back
+    # through tool-heavy turns until a real assistant invocation is found.
+    renamed = None
     for entry in reversed(tail_jsonl(path)):
         if renamed is None and entry.get("type") == "custom-title" and entry.get("customTitle"):
             renamed = entry["customTitle"]
-        if model is None and entry.get("type") == "assistant" and not entry.get("isSidechain"):
-            model = model_name((entry.get("message") or {}).get("model"))
-        if renamed and model:
+        if renamed:
             break
+    model = None
+    for entry in reverse_jsonl(path):
+        if entry.get("type") == "assistant" and not entry.get("isSidechain"):
+            message = entry.get("message")
+            model = model_name(message.get("model")) if isinstance(message, dict) else None
+            if model:
+                break
     title = renamed or title
     session = Session(
         agent="claude", session_id=sid, storage_path=str(path), storage_root=str(root),

@@ -8,6 +8,7 @@ on the same account.
 * One scrollable list of every local session from all three agents, whether you started it
   directly in a terminal or through the bridge.
 * Search, filter by agent / origin / project / status, sort by updated / title / agent / project.
+* Last Model column shows the most recently recorded known model for each chat.
 * Multi-select, details and conversation preview, rename (display alias), archive / unarchive.
 * Open (resume) or fork a session in its native CLI after a preflight; the browser suspends while
   the agent runs and comes back when it exits.
@@ -19,10 +20,10 @@ It is a standalone Python package. It never imports the ai-bridge server and wor
 ```
  ai-bridge — local agent sessions
  Search title, project, ID, model…  ( / )   All agents ▼  Any origin ▼  Any status ▼  All projects ▼
-    Agent   Origin   Status     Updated   Title                     Project        │ Title    Parser refactor
-  ● claude  MCP      active     just now  Fix the login bug         ~/src/app      │ Session  codex:01a1…
-    codex   Direct   idle       16m       Parser refactor           ~/src/app      │ Origin   Direct  No MCP provenance record.
-    cursor  Unknown  idle       1h        Design chat               ~/src/site     │ Last 40 messages …
+    Agent   Title                  Last Model           Updated  │ Title       Parser refactor
+  ● claude  Fix the login bug      claude-sonnet-4-6     just now │ Last Model  gpt-5.4
+    codex   Parser refactor        gpt-5.4               16m      │ Session     codex:01a1…
+    cursor  Design chat            —                     1h       │ Last 40 messages …
  99/100 sessions · 1 marked · sort updated↓ · 1 archived hidden (A) · provenance ok
  q Quit  ? Help  / Search  o Open  n Rename  a Archive  d Delete…  t Trash  s Sort  p Details  r Refresh
 ```
@@ -113,9 +114,19 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | `q` | quit |
 
 The layout adapts to the terminal width. Wide terminals show the details pane beside the list.
-Medium terminals hide the project column and filter. Narrow terminals show a compact list with
-details as a full-screen toggle. Store errors, an empty store, or no matches are shown in place
-rather than as an empty table.
+Title and Last Model appear first; secondary columns (updated, status, origin, project)
+appear as space permits. Long models are ellipsized in the list; `p` shows the full value
+in details, including on narrow terminals. Medium terminals hide the project filter, and
+narrow terminals use short agent names and details as a full-screen toggle. Store errors,
+an empty store, or no matches are shown in place rather than as an empty table.
+
+Last Model uses Claude assistant message models (excluding sidechains and synthetic placeholders),
+Codex turn-context models, and Cursor chat metadata's `lastUsedModel`. Missing or invalid newer
+Claude/Codex records do not erase an earlier known model. `—` means unknown; configured agent defaults are
+never substituted. Claude/Codex model lookup reads backward with bounded memory, including past
+large tool outputs. Cursor chats without `lastUsedModel` remain unknown.
+The existing JSON field `last_used_model` remains a string or `null`; the JSON schema is unchanged.
+Headless `sessions inspect` also includes the complete value.
 
 ### Headless commands
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from .. import paths
 from ..model import Session
 from ..textsafe import UUID_RE, is_uuid
-from .common import HEAD_BYTES, is_noise, iter_jsonl, model_name, tail_jsonl, tool_summary
+from .common import HEAD_BYTES, is_noise, iter_jsonl, model_name, reverse_jsonl, tool_summary
 
 HEAD_LINES = 300
 
@@ -144,11 +144,12 @@ def parse(path: Path, root: Path, info: os.stat_result, archived: bool,
         match = UUID_RE.search(path.name)
         sid = match.group(0) if match else path.stem
     model = None
-    for entry in reversed(tail_jsonl(path)):
+    for entry in reverse_jsonl(path):
         if entry.get("type") == "turn_context":
             payload = entry.get("payload")
             model = model_name(payload.get("model")) if isinstance(payload, dict) else None
-            break
+            if model:
+                break
     subagent = bool(parent) or (isinstance(source, dict) and "subagent" in source)
     session = Session(
         agent="codex", session_id=sid, storage_path=str(path), storage_root=str(root),

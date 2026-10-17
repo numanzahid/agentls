@@ -4,6 +4,7 @@ import json
 import os
 
 import fixtures
+import pytest
 from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID
 
 from ai_bridge_cli import native
@@ -182,7 +183,7 @@ def test_open_refusal_is_reported_not_launched(populated, monkeypatch):
 def test_narrow_terminal_layout(populated):
     async def scenario(app, pilot):
         assert app.tier == "narrow" and not app.query_one("#side").display
-        assert [c.value for c in app.query_one("#table").columns] == ["mark", "agent", "status", "updated", "title"]
+        assert [c.value for c in app.query_one("#table").columns] == ["mark", "agent", "title", "model", "updated"]
         await pilot.press("p")
         await settle(pilot, app)
         assert app.query_one("#side").display and not app.query_one("#table").display
@@ -254,4 +255,45 @@ def test_quit_with_pending_preview_is_clean(populated):
     async def scenario(app, pilot):
         await pilot.press("down", "down")  # schedules debounced preview loads
         await app.action_quit()
+    drive(scenario)
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 90, 100, 129, 130, 150, 200])
+def test_model_and_title_fit_after_resize(populated, width):
+    async def scenario(app, pilot):
+        # Also exercise resizing within a tier and with the side pane hidden.
+        await pilot.resize_terminal(width, 30)
+        await settle(pilot, app)
+        table = app.query_one("#table")
+        columns = {key.value: col for key, col in table.columns.items()}
+        assert columns["title"].width >= 10
+        assert str(columns["model"].label) == "Last Model"
+        assert table.virtual_size.width <= table.size.width
+        assert table.get_cell(f"claude:{CLAUDE_ID}", "model").plain == "claude-test-1"
+        assert table.get_cell(f"codex:{CODEX_ID}", "model").plain == "gpt-test"
+        assert table.get_cell(f"cursor:{CURSOR_ID}", "model").plain == "—"
+        if app.tier == "wide":
+            await pilot.press("p")
+            await settle(pilot, app)
+            assert table.virtual_size.width <= table.size.width
+    drive(scenario)
+
+
+@pytest.mark.parametrize("model", ["claude-" + "long-model-name-" * 12, None])
+def test_details_show_full_model_and_unknown(env, model):
+    fixtures.claude_session(env.claude, CLAUDE_ID, env.project, model=model)
+
+    async def scenario(app, pilot):
+        from rich.console import Console
+        from io import StringIO
+
+        out = StringIO()
+        console = Console(file=out, width=60)
+        console.print(app.query_one("#details").content)
+        assert "Last Model" in out.getvalue()
+        grid = app.query_one("#details").content
+        labels = grid.columns[0]._cells
+        values = grid.columns[1]._cells
+        assert values[labels.index("Last Model")].plain == (model or "—")
+        assert app.query_one("#table").get_cell(f"claude:{CLAUDE_ID}", "model").plain == (model or "—")
     drive(scenario)

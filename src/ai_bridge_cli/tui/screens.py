@@ -141,7 +141,9 @@ class HelpScreen(Dialog):
             ("Origin  ", "bold"), ("MCP", "magenta bold"), " verified bridge provenance record · ",
             ("Direct", "bold"), " no record · ", ("Unknown", "dim"), " cannot verify\n",
             ("Status  ", "bold"), ("active", "green"), " in use · ", ("uncertain", "yellow"),
-            " bridge job unverifiable · ", ("recent", "cyan"), " modified <2 min · idle")
+            " bridge job unverifiable · ", ("recent", "cyan"), " modified <2 min · idle\n",
+            ("Last Model  ", "bold"), "last known model recorded in this chat; — = unknown. "
+            "Full value in details (p); configured defaults are never substituted.")
         with Vertical(classes="box wide"):
             yield Label("Keyboard help", classes="box-title")
             with VerticalScroll(classes="box-body"):

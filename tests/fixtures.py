@@ -97,7 +97,7 @@ def pb(number: int, value) -> bytes:
 
 
 def cursor_session(root: Path, sid: str, project: Path, name: str = "Fixture chat",
-                   subagent: bool = False) -> Path:
+                   subagent: bool = False, model: str | None = None) -> Path:
     """Same layout and protobuf graph as Cursor CLI (adapted from ai-bridge tests)."""
     db = root / "chats" / hashlib.md5(str(project).encode()).hexdigest() / sid / "store.db"
     db.parent.mkdir(parents=True)
@@ -115,6 +115,8 @@ def cursor_session(root: Path, sid: str, project: Path, name: str = "Fixture cha
     turn = blob(pb(1, pb(1, user) + pb(2, answer)))
     state = blob(pb(8, turn) + pb(9, project.as_uri()))
     meta = {"agentId": sid, "latestRootBlobId": state.hex(), "name": name}
+    if model is not None:
+        meta["lastUsedModel"] = model
     if subagent:
         meta["subagentInfo"] = {"parent": "x"}
     con.execute("insert into meta values (?,?)", ("0", json.dumps(meta).encode().hex()))
