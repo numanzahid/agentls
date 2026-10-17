@@ -47,10 +47,10 @@ class ConfirmScreen(Dialog):
 
 
 class RemoveScreen(Dialog):
-    """Removal choices only; native deletion always needs a separate preview."""
+    """Final confirmation for ordinary archive or safe native deletion."""
 
     BINDINGS = [Binding("a", "choose('archive')", "Archive", priority=True),
-                Binding("d", "choose('trash')", "Delete…", priority=True),
+                Binding("d", "choose('trash')", "Delete", priority=True),
                 Binding("c", "cancel", "Cancel", priority=True)]
 
     def __init__(self, title: str):
@@ -60,10 +60,10 @@ class RemoveScreen(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(classes="box removal"):
             yield Label(Text(self.title_text), classes="box-title")
-            yield Static(Text("Archive hides chats; Delete previews native removal. Both are restorable."))
+            yield Static(Text("Archive hides chats; Delete removes them from the native list. Both are restorable."))
             with Horizontal(classes="buttons"):
                 yield Button(Text("a Archive"), id="archive")
-                yield Button(Text("d Delete…"), id="trash")
+                yield Button(Text("d Delete"), id="trash")
                 yield Button(Text("c Cancel"), id="cancel")
 
     def on_mount(self) -> None:
@@ -82,7 +82,7 @@ class DeleteConfirmScreen(ConfirmScreen):
     BINDINGS = [Binding("y", "confirm_delete", "Confirm", priority=True),
                 Binding("n", "cancel", "Cancel", priority=True)]
 
-    def __init__(self, title: str, body: Table, allowed: bool):
+    def __init__(self, title: str, body: Table | Text, allowed: bool):
         super().__init__(title, body, Text("[y] Confirm"), danger=True)
         self.allowed = allowed
 
@@ -202,7 +202,7 @@ class HelpScreen(Dialog):
                        ("Esc", "clear marks (in the list)")]),
         ("Actions", [("Enter / o", "open (resume) in the native CLI"), ("f", "fork (codex, claude)"),
                      ("n", "rename (display alias only)"), ("a", "archive / unarchive (hide; files untouched)"),
-                     ("d / Del", "archive or move to trash (native delete, with preview)"),
+                     ("d / Del", "archive or delete (preflight checked)"),
                      ("t", "trash: restore or purge"), ("y", "copy agent:ID"), ("A", "show/hide archived"),
                      ("Ctrl+S / F2", "settings: close/exec native (default) or suspend and return"),
                      ("q", "quit")]),

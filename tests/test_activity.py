@@ -98,3 +98,20 @@ def test_live_unreadable_fd_table_still_blocks(env, monkeypatch):
     finally:
         child.terminate()
         child.wait()
+
+
+def test_snapshot_records_every_holder_of_one_inode(env):
+    path = env.root / 'shared.jsonl'
+    path.write_text('{}\n')
+    children = [subprocess.Popen([sys.executable, '-c', HOLD, str(path)],
+                                stdout=subprocess.PIPE, text=True) for _ in range(2)]
+    try:
+        for child in children:
+            assert child.stdout.readline().strip() == 'ready'
+        info = path.stat()
+        act = activity.snapshot()
+        assert act.file_holders[(info.st_dev, info.st_ino)] == {child.pid for child in children}
+    finally:
+        for child in children:
+            child.terminate()
+            child.wait()

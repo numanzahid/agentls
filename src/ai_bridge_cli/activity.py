@@ -51,6 +51,7 @@ def _ancestors() -> set[int]:
 @dataclass
 class Activity:
     open_files: dict = field(default_factory=dict)    # (dev, ino) -> pid
+    file_holders: dict = field(default_factory=dict)  # (dev, ino) -> all observed PIDs
     locked: set = field(default_factory=set)          # (dev, ino)
     cmdline_ids: dict = field(default_factory=dict)   # uuid(lower) -> pid
     claude_live: dict = field(default_factory=dict)   # session uuid -> pid
@@ -233,6 +234,7 @@ def snapshot() -> Activity:
             except OSError:
                 continue  # e.g. anonymous inode targets without a stat-able path
             act.open_files.setdefault((info.st_dev, info.st_ino), pid)
+            act.file_holders.setdefault((info.st_dev, info.st_ino), set()).add(pid)
     act.locked = _locks(act)
     act.claude_live = _claude_registry(act)
     return act

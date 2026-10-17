@@ -31,7 +31,7 @@ from ..output import relative
 from ..scanners import history
 from ..textsafe import one_line, safe
 from .screens import (ConfirmScreen, DeleteConfirmScreen, HelpScreen, InputScreen, RemoveScreen,
-                      SettingsScreen, TrashScreen, plan_table)
+                      SettingsScreen, TrashScreen)
 
 AGENT_STYLE = {"claude": "#d97757", "codex": "#10a37f", "cursor": "#5b8def"}
 AGENT_SHORT = {"claude": "cl", "codex": "cx", "cursor": "cu"}
@@ -804,6 +804,18 @@ class SessionBrowser(App):
         sessions = self.targets()
         if not sessions or not self._require_idle():
             return
+        self.prepare_remove(sessions)
+
+    @work(thread=True, exclusive=True, group="action")
+    def prepare_remove(self, sessions: list[Session]) -> None:
+        try:
+            plan = trash.build_plan(sessions)
+        except Exception as error:
+            self.call_from_thread(self.notify, f"Preflight failed: {error}", severity="error", markup=False)
+            return
+        self.call_from_thread(self._show_remove, sessions, plan)
+
+    def _show_remove(self, sessions: list[Session], plan: trash.DeletePlan) -> None:
         count = len(sessions)
         what = f"{count} session(s)" if count > 1 else f"“{one_line(sessions[0].display_title, 60)}”"
 
@@ -811,42 +823,61 @@ class SessionBrowser(App):
             if choice == "archive":
                 self._set_archived(sessions, True)
             elif choice == "trash":
-                self.notify("Preparing preview…", timeout=2, markup=False)
-                self.plan_delete(sessions)
+                self._confirm_delete(plan)
 
         self.push_screen(RemoveScreen(f"Remove {what}?"), chosen)
 
-    @work(thread=True, exclusive=True, group="action")
-    def plan_delete(self, sessions: list[Session]) -> None:
-        try:
-            plan = trash.build_plan(sessions)
-        except Exception as error:
-            self.call_from_thread(self.notify, f"Preview failed: {error}", severity="error", markup=False)
-            return
-        self.call_from_thread(self._confirm_delete, plan)
-
     def _confirm_delete(self, plan: trash.DeletePlan) -> None:
-        data = plan.to_json()
-        allowed = len(plan.allowed)
-        title = (f"Move {allowed} of {len(plan.items)} session(s) to trash?" if allowed else
-                 "Nothing can be deleted")
-        self.push_screen(DeleteConfirmScreen(title, plan_table(data), allowed=bool(allowed)),
-                         lambda ok: self.run_delete(plan) if ok else None)
+        if len(plan.allowed) == len(plan.items):
+            self.run_delete(plan)
+        else:
+            self.offer_process_delete(plan)
 
     @work(thread=True, exclusive=True, group="action")
-    def run_delete(self, plan: trash.DeletePlan) -> None:
+    def offer_process_delete(self, plan: trash.DeletePlan) -> None:
+        from . import process_delete
         try:
-            result = trash.execute(plan)
+            stop = process_delete.prepare(plan)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.call_from_thread(self._blocked_delete, plan, str(error))
+            return
+        self.call_from_thread(self._confirm_process_delete, stop)
+
+    def _confirm_process_delete(self, stop) -> None:
+        process, session = stop.process, stop.deletion.sessions[0]
+        body = Text(f"Send SIGTERM to PID {process.pid} (native Codex), ending "
+                    f"codex:{session.session_id} and interrupting its work, then archive "
+                    "this chat with Codex. Unsaved work may be lost.")
+        screen = DeleteConfirmScreen("Kill process and delete?", body, allowed=True)
+        screen.confirm = Text("[y] Kill + delete")
+        screen.add_class("process-stop")
+        self.push_screen(screen, lambda ok: self.run_delete(stop.deletion, stop) if ok else None)
+
+    def _blocked_delete(self, plan: trash.DeletePlan, reason: str) -> None:
+        details = "\n".join(f"{item.agent}:{item.session_id}: {'; '.join(item.blockers)}"
+                            for item in plan.items if item.blockers)
+        details = details.replace("; close them, or use the CLI with --allow-uninspectable (high risk).",
+                                  ". Close the process and retry.")
+        body = Text("Nothing deleted. " + reason + "\n" + details)
+        self.push_screen(DeleteConfirmScreen("Deletion blocked", body, allowed=False))
+
+    @work(thread=True, exclusive=True, group="action")
+    def run_delete(self, plan: trash.DeletePlan, stop=None) -> None:
+        from . import process_delete
+        try:
+            result = process_delete.execute(stop) if stop else trash.execute(plan)
         except Exception as error:
             self.call_from_thread(self.notify, f"Nothing deleted: {error}", severity="error", markup=False,
                                   timeout=12)
             return
-        moved, failed = len(result["moved"]), result["failed"]
-        message = f"Moved {moved} session(s) to trash (batch {result['batch_id']}); restore with t."
+        moved, failed, skipped = len(result["moved"]), result["failed"], result["skipped"]
+        message = f"Removed {moved} session(s) (batch {result['batch_id']}); restore with t."
         if failed:
             message += f" {len(failed)} failed: " + "; ".join(f"{f['selector']}: {f['error']}" for f in failed)
+        if skipped:
+            message += f" {len(skipped)} blocked; nothing removed for those sessions."
         self.call_from_thread(self.notify, message, markup=False, timeout=12,
-                              severity="warning" if failed else "information")
+                              severity="warning" if failed or skipped else "information")
         self.call_from_thread(self.refresh_catalog)
 
     def action_trash(self) -> None:

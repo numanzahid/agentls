@@ -126,34 +126,28 @@ def test_remove_archive_shortcut(populated):
     drive(scenario)
 
 
-@pytest.mark.parametrize("confirm", ["y", "click"])
+@pytest.mark.parametrize("confirm", ["d", "click"])
 def test_trash_and_restore_flow(populated, confirm):
     async def scenario(app, pilot):
-        claude = app.by_key[f"claude:{CLAUDE_ID}"]
-        app.query_one("#table").move_cursor(row=keys(app).index(claude.selector))
+        target = app.by_key[f"claude:{CLAUDE_ID}"]
+        app._q("#table").move_cursor(row=keys(app).index(target.selector))
         await pilot.press("d")
-        await pilot.pause()
-        await pilot.press("d")  # separate native safety preview
         await settle(pilot, app)
-        assert isinstance(app.screen, screens.ConfirmScreen) and app.screen.danger
-        assert app.focused.id == "cancel"  # destructive dialogs default to Cancel
-        assert os.path.exists(claude.storage_path) and not populated.cli_data.exists()
+        assert isinstance(app.screen, screens.RemoveScreen) and app.focused.id == "cancel"
+        assert os.path.exists(target.storage_path)
         if confirm == "click":
-            await pilot.click("#confirm")
+            await pilot.click("#trash")
         else:
-            await pilot.press("y")
+            await pilot.press("d")
         await settle(pilot, app)
-        assert not os.path.exists(claude.storage_path)
-        assert f"claude:{CLAUDE_ID}" not in app.by_key
+        assert len(app.screen_stack) == 1 and not os.path.exists(target.storage_path)
         await pilot.press("t")
         await settle(pilot, app)
-        assert isinstance(app.screen, screens.TrashScreen)
         await pilot.press("enter")
         await pilot.pause()
-        assert isinstance(app.screen, screens.ConfirmScreen)
         await pilot.click("#confirm")
         await settle(pilot, app)
-        assert os.path.exists(claude.storage_path) and f"claude:{CLAUDE_ID}" in app.by_key
+        assert os.path.exists(target.storage_path)
     drive(scenario)
 
 
@@ -234,8 +228,7 @@ def test_codex_trash_uses_native_archive(populated):
         await pilot.pause()
         await pilot.press("d")
         await settle(pilot, app)
-        await pilot.press("y")
-        await settle(pilot, app)
+        assert len(app.screen_stack) == 1
         assert ["archive", CODEX_ID] in populated.calls()
     drive(scenario)
 
@@ -291,8 +284,9 @@ def test_details_show_full_model_and_unknown(env, model):
     fixtures.claude_session(env.claude, CLAUDE_ID, env.project, model=model)
 
     async def scenario(app, pilot):
-        from rich.console import Console
         from io import StringIO
+
+        from rich.console import Console
 
         out = StringIO()
         console = Console(file=out, width=60)
@@ -482,10 +476,12 @@ def test_suspend_unsupported_keeps_browser(populated, monkeypatch):
 
 
 def test_incomplete_delete_preview_gives_safe_alternatives(populated):
+    from io import StringIO
+
+    from rich.console import Console
+
     from ai_bridge_cli import activity, trash
     from ai_bridge_cli.catalog import Catalog
-    from rich.console import Console
-    from io import StringIO
     session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
     plan = trash.build_plan([session], act=activity.Activity(uninspectable=[(42, "codex")]))
     out = StringIO()
@@ -545,10 +541,11 @@ def test_remove_cancel_never_touches_stores(populated, monkeypatch, cancel):
     from test_trash import digest_tree
     before = digest_tree(populated.claude), digest_tree(populated.codex), digest_tree(populated.cursor)
     plans = []
-    monkeypatch.setattr(SessionBrowser, 'plan_delete', lambda self, sessions: plans.append(sessions))
+    monkeypatch.setattr(SessionBrowser, 'run_delete', lambda self, plan: plans.append(plan))
 
     async def scenario(app, pilot):
         await pilot.press('d')
+        await settle(pilot, app)
         assert isinstance(app.screen, screens.RemoveScreen)
         assert app.focused.id == 'cancel'
         await pilot.press(cancel)
@@ -561,29 +558,58 @@ def test_remove_cancel_never_touches_stores(populated, monkeypatch, cancel):
 
 
 @pytest.mark.parametrize('cancel', ['n', 'escape', 'enter'])
-def test_native_delete_cancel_keeps_files(populated, cancel):
+def test_process_delete_cancel_keeps_files(populated, monkeypatch, cancel):
+    from types import SimpleNamespace
+
+    from ai_bridge_cli import trash
     async def scenario(app, pilot):
-        target = app.by_key[f'claude:{CLAUDE_ID}']
-        app._q('#table').move_cursor(row=keys(app).index(target.selector))
-        await pilot.press('d', 'd')
-        await settle(pilot, app)
-        assert isinstance(app.screen, screens.DeleteConfirmScreen)
-        assert app.screen.allowed and app.focused.id == 'cancel'
-        await pilot.press('d', 'a', 'c')  # removal choices do not leak through this modal
+        target = app.by_key[f'codex:{CODEX_ID}']
+        plan = trash.build_plan([target])
+        calls = []
+        monkeypatch.setattr(app, 'run_delete', lambda *args: calls.append(args))
+        app._confirm_process_delete(SimpleNamespace(process=SimpleNamespace(pid=42), deletion=plan))
+        await pilot.pause()
+        assert app.focused.id == 'cancel'
+        assert '42' in app.screen.body.plain and target.selector in app.screen.body.plain
+        assert 'Unsaved' in app.screen.body.plain
+        await pilot.press('d', 'a', 'c')
         assert isinstance(app.screen, screens.DeleteConfirmScreen)
         if cancel == 'n':
             app.screen.query_one('#confirm').focus()
         await pilot.press(cancel)
         await settle(pilot, app)
-        assert len(app.screen_stack) == 1 and os.path.exists(target.storage_path)
-        assert not populated.cli_data.exists()
+        assert len(app.screen_stack) == 1 and not calls
+        assert os.path.exists(target.storage_path) and not populated.cli_data.exists()
+    drive(scenario)
+
+
+@pytest.mark.parametrize('confirm', ['y', 'click'])
+def test_process_delete_explicit_consent(populated, monkeypatch, confirm):
+    from types import SimpleNamespace
+
+    from ai_bridge_cli import trash
+    async def scenario(app, pilot):
+        target = app.by_key[f'codex:{CODEX_ID}']
+        plan = trash.build_plan([target])
+        stop = SimpleNamespace(process=SimpleNamespace(pid=42), deletion=plan)
+        calls = []
+        monkeypatch.setattr(app, 'run_delete', lambda *args: calls.append(args))
+        app._confirm_process_delete(stop)
+        await pilot.pause()
+        if confirm == 'click':
+            await pilot.click('#confirm')
+        else:
+            await pilot.press('y')
+        await settle(pilot, app)
+        assert calls == [(plan, stop)]
     drive(scenario)
 
 
 @pytest.mark.parametrize('blocker', ['active', 'recent', 'uninspectable', 'bridge-job', 'unsupported'])
 def test_native_delete_blocked_modal_cannot_confirm(populated, monkeypatch, blocker):
-    from ai_bridge_cli import activity, trash
     from dataclasses import replace
+
+    from ai_bridge_cli import activity, trash
 
     async def scenario(app, pilot):
         target = app.by_key[f'codex:{CODEX_ID}' if blocker == 'unsupported' else f'claude:{CLAUDE_ID}']
@@ -601,7 +627,7 @@ def test_native_delete_blocked_modal_cannot_confirm(populated, monkeypatch, bloc
         calls = []
         monkeypatch.setattr(app, 'run_delete', lambda plan: calls.append(plan))
         app._confirm_delete(plan)
-        await pilot.pause()
+        await settle(pilot, app)
         assert app.screen.query_one('#confirm').disabled
         await pilot.press('y', 'tab', 'enter', 'y')
         await settle(pilot, app)
@@ -617,9 +643,9 @@ def test_native_delete_rechecks_after_keyboard_confirmation(populated, monkeypat
     async def scenario(app, pilot):
         target = app.by_key[f'claude:{CLAUDE_ID}']
         app._q('#table').move_cursor(row=keys(app).index(target.selector))
-        await pilot.press('d', 'd')
+        await pilot.press('d')
         await settle(pilot, app)
-        assert isinstance(app.screen, screens.DeleteConfirmScreen) and app.screen.allowed
+        assert isinstance(app.screen, screens.RemoveScreen)
         if change == 'file':
             with open(target.storage_path, 'a') as stream:
                 stream.write('{}\n')
@@ -627,7 +653,7 @@ def test_native_delete_rechecks_after_keyboard_confirmation(populated, monkeypat
             act = (activity.Activity(claude_live={CLAUDE_ID: 42}) if change == 'activity' else
                    activity.Activity(uninspectable=[(42, 'codex')]))
             monkeypatch.setattr(activity, 'snapshot', lambda: act)
-        await pilot.press('y')
+        await pilot.press('d')
         await settle(pilot, app)
         assert os.path.exists(target.storage_path) and not populated.cli_data.exists()
     drive(scenario)
@@ -643,32 +669,26 @@ def test_remove_modal_labels_and_buttons_fit(populated, width):
             assert button.region.right <= width and button.region.bottom <= 20
         await pilot.press('d')
         await settle(pilot, app)
-        assert isinstance(app.screen, screens.DeleteConfirmScreen)
-        for button in app.screen.query('Button'):
-            assert button.region.right <= width and button.region.bottom <= 20
-        await pilot.press('n')
+        assert len(app.screen_stack) == 1
+
     drive(scenario, size=(width, 20))
 
 
-def test_native_delete_mixed_preview_only_moves_allowed_items(populated):
-    from ai_bridge_cli import activity, trash
+def test_mixed_selection_refuses_partial_deletion(populated):
     from dataclasses import replace
 
+    from ai_bridge_cli import activity, trash
     async def scenario(app, pilot):
         allowed = app.by_key[f'claude:{CLAUDE_ID}']
         blocked = replace(app.by_key[f'cursor:{CURSOR_ID}'], status='active', status_note='in use')
         plan = trash.build_plan([allowed, blocked], act=activity.Activity())
         app._confirm_delete(plan)
-        await pilot.pause()
-        assert len(plan.allowed) == 1
-        assert '1 of 2' in app.screen.title_text
-        assert plan.items[1].blockers
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.DeleteConfirmScreen) and not app.screen.allowed
         await pilot.press('y')
         await settle(pilot, app)
-        assert not os.path.exists(allowed.storage_path) and os.path.exists(blocked.storage_path)
-        batches = trash.list_batches()
-        assert len(batches) == 1 and len(batches[0]['items']) == 1
-        assert batches[0]['items'][0]['session_id'] == CLAUDE_ID
+        assert os.path.exists(allowed.storage_path) and os.path.exists(blocked.storage_path)
+        assert not populated.cli_data.exists()
     drive(scenario)
 
 
@@ -782,3 +802,18 @@ def test_selected_count_stays_prominent_and_separate_from_pane_focus(populated, 
         assert not app.marked and 'selected' not in app._q('#statusbar').content.plain
         assert_focused_pane(app, '#table', accent)
     drive(scenario, size=(width, 24))
+
+
+def test_normal_multi_delete_has_one_confirmation(populated):
+    async def scenario(app, pilot):
+        targets = [app.by_key[f'claude:{CLAUDE_ID}'], app.by_key[f'cursor:{CURSOR_ID}']]
+        app.marked = {target.selector for target in targets}
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.RemoveScreen)
+        assert '2 session(s)' in app.screen.title_text
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert len(app.screen_stack) == 1
+        assert all(not os.path.exists(target.storage_path) for target in targets)
+    drive(scenario)

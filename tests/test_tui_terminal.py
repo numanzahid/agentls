@@ -98,15 +98,15 @@ raise SystemExit(app.run())
         os.close(slave)
 
 
-def test_real_terminal_delete_requires_separate_preview_and_confirmation(populated):
+def test_real_terminal_delete_uses_single_confirmation(populated):
     """Send actual terminal bytes through Textual's modal binding/focus handling."""
     from pathlib import Path
+
     from ai_bridge_cli.catalog import Catalog
 
     target = Catalog().refresh(probe_activity=False).get('claude', CLAUDE_ID)
     ready = populated.root / 'delete-browser-ready'
     choice = populated.root / 'remove-modal-ready'
-    preview = populated.root / 'delete-modal-ready'
     returned = populated.root / 'delete-cancelled'
     code = f'''
 from pathlib import Path
@@ -117,7 +117,6 @@ class Browser(app.SessionBrowser):
     CSS_PATH = str(Path(app.__file__).with_name('app.tcss'))
     def on_mount(self):
         super().on_mount()
-        self.seen_preview = False
         self.set_interval(0.05, self.signal)
     def signal(self):
         if not self.loaded:
@@ -129,10 +128,7 @@ class Browser(app.SessionBrowser):
             Path({str(ready)!r}).touch()
         if isinstance(self.screen, screens.RemoveScreen) and self.focused:
             Path({str(choice)!r}).touch()
-        if isinstance(self.screen, screens.DeleteConfirmScreen) and self.focused:
-            self.seen_preview = True
-            Path({str(preview)!r}).touch()
-        if self.seen_preview and len(self.screen_stack) == 1:
+        if Path({str(choice)!r}).exists() and len(self.screen_stack) == 1:
             Path({str(returned)!r}).touch()
 Browser(periodic_refresh=False, probe_activity=False).run()
 '''
@@ -157,21 +153,13 @@ Browser(periodic_refresh=False, probe_activity=False).run()
         os.write(master, b'd')
         until(choice.exists)
         assert Path(target.storage_path).exists() and not populated.cli_data.exists()
-        os.write(master, b'd')
-        until(preview.exists)
-        assert Path(target.storage_path).exists() and not populated.cli_data.exists()
-        os.write(master, b'n')
+        os.write(master, b'c')
         until(returned.exists)
         assert Path(target.storage_path).exists() and not populated.cli_data.exists()
-        # Repeat the same real keyboard flow, then explicitly confirm.
-        preview.unlink()
         choice.unlink()
         os.write(master, b'd')
         until(choice.exists)
         os.write(master, b'd')
-        until(preview.exists)
-        assert Path(target.storage_path).exists()
-        os.write(master, b'y')
         until(lambda: not Path(target.storage_path).exists())
         until(lambda: len(list((populated.cli_data / 'trash').glob('*/manifest.json'))) == 1)
         os.write(master, b'q')

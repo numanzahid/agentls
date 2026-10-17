@@ -12,7 +12,7 @@ on the same account.
 * Multi-select, details and conversation preview, rename (display alias), archive / unarchive.
 * Open (resume) or fork a session in its native CLI after a preflight; by default the browser
   exits and exec-replaces itself with the agent. Settings can select suspend and return instead.
-* Explicit native delete into a restorable trash, with a preview first.
+* Explicit native delete into a restorable trash, with preflight checks.
 * Headless `--json` / table commands for scripts.
 
 It is a standalone Python package. It never imports the ai-bridge server and works without it.
@@ -105,7 +105,7 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | `f` | fork (Codex `fork`, Claude `--resume --fork-session`) |
 | `n` | rename (display alias; empty clears) |
 | `a` | archive / unarchive the marked rows (or the current row) |
-| `d` / `Del` | remove: `a` Archive, `d` Delete… (native safety preview), `c` Cancel; starts on Cancel |
+| `d` / `Del` | remove: `a` Archive, `d` Delete (final confirmation), `c` Cancel; starts on Cancel |
 | `t` | trash: restore an item, or `P` to purge a batch |
 | `A` | show / hide archived sessions |
 | `p` | details and preview pane (full screen on narrow terminals) |
@@ -197,8 +197,21 @@ changes no native files. Aliases and archive flags live in `~/.local/state/ai-br
 Aliases and archive flags written by older ai-bridge CLIs in the server's state directory are
 still honoured, read-only.
 
-**Delete (move to trash)** is explicit. It always shows a preview first and never unlinks anything.
-In the preview, `y` confirms the allowed items and `n` / `Esc` cancels; Enter starts on Cancel.
+**Delete (move to trash)** is explicit and never unlinks native session files. In the TUI,
+the `a` Archive / `d` Delete / `c` Cancel modal is the final confirmation for safe deletion;
+Cancel has initial focus. Preflight runs before the modal and is checked again on execution.
+If any selected chat is blocked, none of the selection is deleted.
+
+Only when an exclusive native `codex resume UUID` process is the sole blocker can the TUI
+offer **Kill process and delete**. This separate confirmation names the PID and exact session
+and warns that work will be interrupted: `y` sends SIGTERM and then attempts native archive;
+`n`, Escape, or Enter on the initially focused Cancel cancels. The process must belong entirely
+to your account and match the installed native executable, start time and open rollout inode.
+Other open files (apart from standard terminal/pipe streams), sockets, children, shared holders,
+wrapped executables, MCP modes and multiple selections are refused. No SIGKILL is sent.
+After a bounded wait, the original deletion checks run again; changed files or remaining blockers
+stop deletion and are reported. Recent writes still require waiting until idle. The ordinary CLI
+preview/plan-ID flow is unchanged; there is no process-termination bypass flag.
 Blocked items cannot be confirmed.
 
 * **Preview / plan.** Every file records its device, inode, type, size, mtime and ctime. Every

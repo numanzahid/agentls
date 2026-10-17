@@ -190,6 +190,10 @@ Screen {
     padding: 0;
 }
 
+.process-stop #cancel {
+    width: 12;
+}
+
 .native-delete .box-body {
     height: 1fr;
 }
