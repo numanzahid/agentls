@@ -165,6 +165,14 @@ def _comm(base: Path) -> str:
         return "?"
 
 
+def _exited(base: Path) -> bool:
+    """Only a confirmed zombie/dead process can be ignored: it holds no files."""
+    try:
+        return (base / "stat").read_text().rsplit(") ", 1)[1].split()[0] in ("Z", "X", "x")
+    except (OSError, IndexError):
+        return False  # unreadable state is not proof of exit
+
+
 def snapshot() -> Activity:
     act = Activity(taken=time.time())
     me = os.geteuid()
@@ -189,6 +197,8 @@ def snapshot() -> Activity:
             continue
         if pid == own:  # previews briefly open stores; that is not use by another client
             continue
+        if _exited(base):
+            continue
         if pid not in skip:
             try:
                 cmd = (base / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
@@ -201,6 +211,8 @@ def snapshot() -> Activity:
         try:
             fds = os.listdir(base / "fd")
         except PermissionError:
+            if _exited(base):  # may have exited since the first state check
+                continue
             comm = _comm(base)
             (act.tolerated if comm in TOLERATED_COMMS else act.uninspectable).append((pid, comm))
             continue
@@ -215,7 +227,8 @@ def snapshot() -> Activity:
             except FileNotFoundError:
                 continue  # closed meanwhile
             except PermissionError:
-                act.uninspectable.append((pid, _comm(base)))
+                if not _exited(base):
+                    act.uninspectable.append((pid, _comm(base)))
                 break
             except OSError:
                 continue  # e.g. anonymous inode targets without a stat-able path

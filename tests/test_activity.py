@@ -65,3 +65,36 @@ def test_flock_is_detected(env):
     finally:
         child.kill()
         child.wait()
+
+
+def test_zombie_has_no_files_and_does_not_block_inspection(env):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        # Observe exit without reaping it; the kernel retains /proc/<pid> as Z.
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert activity._exited(activity.PROC / str(child.pid))
+        snap = activity.snapshot()
+        assert child.pid not in {pid for pid, _ in snap.uninspectable}
+        assert child.pid not in snap.open_files.values()
+    finally:
+        child.wait()
+
+
+def test_live_unreadable_fd_table_still_blocks(env, monkeypatch):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    original = os.listdir
+
+    def denied(path):
+        if str(path) == f"/proc/{child.pid}/fd":
+            raise PermissionError("simulated non-dumpable live process")
+        return original(path)
+
+    monkeypatch.setattr(activity.os, "listdir", denied)
+    try:
+        assert not activity._exited(activity.PROC / str(child.pid))
+        snap = activity.snapshot()
+        assert child.pid in {pid for pid, _ in snap.uninspectable}
+        assert not snap.complete
+    finally:
+        child.terminate()
+        child.wait()
