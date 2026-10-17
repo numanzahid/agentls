@@ -25,7 +25,7 @@ class Dialog(ModalScreen):
 
 
 class ConfirmScreen(Dialog):
-    def __init__(self, title: str, body: Text | Table | str, confirm: str = "Confirm", danger: bool = False):
+    def __init__(self, title: str, body: Text | Table | str, confirm: str | Text = "Confirm", danger: bool = False):
         super().__init__()
         self.title_text, self.body, self.confirm, self.danger = title, body, confirm, danger
 
@@ -44,6 +44,62 @@ class ConfirmScreen(Dialog):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm")
+
+
+class RemoveScreen(Dialog):
+    """Removal choices only; native deletion always needs a separate preview."""
+
+    BINDINGS = [Binding("a", "choose('archive')", "Archive", priority=True),
+                Binding("d", "choose('trash')", "Delete…", priority=True),
+                Binding("c", "cancel", "Cancel", priority=True)]
+
+    def __init__(self, title: str):
+        super().__init__()
+        self.title_text = title
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="box removal"):
+            yield Label(Text(self.title_text), classes="box-title")
+            yield Static(Text("Archive hides chats; Delete previews native removal. Both are restorable."))
+            with Horizontal(classes="buttons"):
+                yield Button(Text("a Archive"), id="archive")
+                yield Button(Text("d Delete…"), id="trash")
+                yield Button(Text("c Cancel"), id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#cancel", Button).focus()
+
+    def action_choose(self, choice: str) -> None:
+        self.dismiss(choice)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None if event.button.id == "cancel" else event.button.id)
+
+
+class DeleteConfirmScreen(ConfirmScreen):
+    """Shortcuts are modal-local and work even when a button has focus."""
+
+    BINDINGS = [Binding("y", "confirm_delete", "Confirm", priority=True),
+                Binding("n", "cancel", "Cancel", priority=True)]
+
+    def __init__(self, title: str, body: Table, allowed: bool):
+        super().__init__(title, body, Text("[y] Confirm"), danger=True)
+        self.allowed = allowed
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.query_one(".box").add_class("native-delete")
+        self.query_one("#cancel", Button).label = Text("[n] Cancel")
+        self.query_one("#confirm", Button).disabled = not self.allowed
+
+    def action_confirm_delete(self) -> None:
+        if self.allowed:
+            self.dismiss(True)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.prevent_default()  # Textual also dispatches handlers on base classes.
+        event.stop()
+        self.dismiss(self.allowed and event.button.id == "confirm")
 
 
 class InputScreen(Dialog):
@@ -118,7 +174,8 @@ def plan_table(plan: dict) -> Table:
         mark = Text("✔ ", style="green bold") if item["allowed"] else Text("✘ ", style="red bold")
         grid.add_row(mark, Text.assemble((f"{item['agent']} ", "bold"), one_line(item["title"], 80)))
         grid.add_row("", Text(f"{item['agent']}:{item['session_id']}", style="dim"))
-        grid.add_row("", Text(f"{item['method']}: {item['note']}", style="italic"))
+        method = "Native Codex archive (restorable)" if item["method"] == "codex-archive" else "Move to trash (restorable)"
+        grid.add_row("", Text(method, style="italic"))
         for entry in item["entries"]:
             grid.add_row("", Text(f"{entry['kind']}: {safe(entry['path'])}", style="dim"))
         for blocker in item["blockers"]:
@@ -126,10 +183,8 @@ def plan_table(plan: dict) -> Table:
         grid.add_row("", "")
     if any("Running processes cannot be fully inspected" in blocker
            for item in plan["items"] for blocker in item["blockers"]):
-        grid.add_row("", Text("Safety check incomplete: this does not prove the selected chat is active. "
-                              "Exit the listed live agents normally, wait at least 120 seconds after "
-                              "the last write, then refresh and preview again. Archive (a) hides chats "
-                              "without touching native files. The browser never bypasses this check.",
+        grid.add_row("", Text("Incomplete check does not prove activity. Close listed agents, wait 120s, refresh. "
+                              "Archive (a) keeps files; the browser never bypasses safety checks.",
                               style="yellow"))
     return grid
 
@@ -139,7 +194,7 @@ class HelpScreen(Dialog):
 
     KEYS = [
         ("Navigation", [("↑/↓ PgUp/PgDn Home/End", "move"), ("/", "search (Esc returns to the list)"),
-                        ("1 / 2 / 3 / 4 / 5", "search / sessions / details / filters / settings (outside text entry)"),
+                        ("1 / 2 / 3 / 4 / 5", "search / filters / session list / preview & details / settings (outside text entry)"),
                         ("Tab / Shift+Tab", "move between search, filters and list"),
                         ("s / S", "cycle sort key / reverse order (or click a column header)"),
                         ("p", "toggle details & preview pane"), ("r / F5", "refresh")]),

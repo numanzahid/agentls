@@ -96,3 +96,92 @@ raise SystemExit(app.run())
         child.wait()
         os.close(master)
         os.close(slave)
+
+
+def test_real_terminal_delete_requires_separate_preview_and_confirmation(populated):
+    """Send actual terminal bytes through Textual's modal binding/focus handling."""
+    from pathlib import Path
+    from ai_bridge_cli.catalog import Catalog
+
+    target = Catalog().refresh(probe_activity=False).get('claude', CLAUDE_ID)
+    ready = populated.root / 'delete-browser-ready'
+    choice = populated.root / 'remove-modal-ready'
+    preview = populated.root / 'delete-modal-ready'
+    returned = populated.root / 'delete-cancelled'
+    code = f'''
+from pathlib import Path
+from ai_bridge_cli import activity
+from ai_bridge_cli.tui import app, screens
+activity.snapshot = lambda: activity.Activity()
+class Browser(app.SessionBrowser):
+    CSS_PATH = str(Path(app.__file__).with_name('app.tcss'))
+    def on_mount(self):
+        super().on_mount()
+        self.seen_preview = False
+        self.set_interval(0.05, self.signal)
+    def signal(self):
+        if not self.loaded:
+            return
+        if not Path({str(ready)!r}).exists():
+            row = [s.selector for s in self.shown].index('claude:{CLAUDE_ID}')
+            self._q('#table').move_cursor(row=row)
+            self._q('#table').focus()
+            Path({str(ready)!r}).touch()
+        if isinstance(self.screen, screens.RemoveScreen) and self.focused:
+            Path({str(choice)!r}).touch()
+        if isinstance(self.screen, screens.DeleteConfirmScreen) and self.focused:
+            self.seen_preview = True
+            Path({str(preview)!r}).touch()
+        if self.seen_preview and len(self.screen_stack) == 1:
+            Path({str(returned)!r}).touch()
+Browser(periodic_refresh=False, probe_activity=False).run()
+'''
+    driver = populated.root / 'delete_driver.py'
+    driver.write_text(code)
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
+    child = subprocess.Popen([sys.executable, str(driver)], stdin=slave, stdout=slave, stderr=slave,
+                             env={**os.environ, 'TERM': 'xterm-256color'})
+    output = bytearray()
+
+    def until(predicate):
+        deadline = time.monotonic() + 20
+        while not predicate():
+            assert time.monotonic() < deadline, output.decode(errors='replace')[-4000:]
+            if select.select([master], [], [], 0.05)[0]:
+                output.extend(os.read(master, 65536))
+            assert child.poll() is None, output.decode(errors='replace')[-4000:]
+
+    try:
+        until(ready.exists)
+        os.write(master, b'd')
+        until(choice.exists)
+        assert Path(target.storage_path).exists() and not populated.cli_data.exists()
+        os.write(master, b'd')
+        until(preview.exists)
+        assert Path(target.storage_path).exists() and not populated.cli_data.exists()
+        os.write(master, b'n')
+        until(returned.exists)
+        assert Path(target.storage_path).exists() and not populated.cli_data.exists()
+        # Repeat the same real keyboard flow, then explicitly confirm.
+        preview.unlink()
+        choice.unlink()
+        os.write(master, b'd')
+        until(choice.exists)
+        os.write(master, b'd')
+        until(preview.exists)
+        assert Path(target.storage_path).exists()
+        os.write(master, b'y')
+        until(lambda: not Path(target.storage_path).exists())
+        until(lambda: len(list((populated.cli_data / 'trash').glob('*/manifest.json'))) == 1)
+        os.write(master, b'q')
+        child.wait(timeout=20)
+        assert child.returncode == 0
+        batches = list((populated.cli_data / 'trash').glob('*/manifest.json'))
+        assert json.loads(batches[0].read_text())['items'][0]['status'] == 'trashed'
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+        os.close(master)
+        os.close(slave)

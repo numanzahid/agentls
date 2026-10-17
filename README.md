@@ -98,14 +98,14 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | `↑ ↓ PgUp PgDn Home End` | move |
 | `/` | search (title, alias, project, ID, model); `Esc` returns to the list |
 | `Tab` | move between search, filters and the list |
-| `1` / `2` / `3` / `4` / `5` | focus search / sessions / details / filters / open settings |
+| `1` / `2` / `3` / `4` / `5` | focus search / filters / session list / preview & details / open settings |
 | `s` / `S` / click header | cycle sort key / reverse |
 | `Space`, `*`, `Esc` | mark row, mark all visible (again: clear), clear marks |
 | `Enter` / `o` | open (resume) in the native CLI, after a preflight and confirmation |
 | `f` | fork (Codex `fork`, Claude `--resume --fork-session`) |
 | `n` | rename (display alias; empty clears) |
 | `a` | archive / unarchive the marked rows (or the current row) |
-| `d` / `Del` | remove: **Archive** (default) or **Move to trash…** (native delete, previewed) |
+| `d` / `Del` | remove: `a` Archive, `d` Delete… (native safety preview), `c` Cancel; starts on Cancel |
 | `t` | trash: restore an item, or `P` to purge a batch |
 | `A` | show / hide archived sessions |
 | `p` | details and preview pane (full screen on narrow terminals) |
@@ -193,6 +193,8 @@ Aliases and archive flags written by older ai-bridge CLIs in the server's state 
 still honoured, read-only.
 
 **Delete (move to trash)** is explicit. It always shows a preview first and never unlinks anything.
+In the preview, `y` confirms the allowed items and `n` / `Esc` cancels; Enter starts on Cancel.
+Blocked items cannot be confirmed.
 
 * **Preview / plan.** Every file records its device, inode, type, size, mtime and ctime. Every
   directory also records a bounded, non-following, recursive fingerprint of *every object inside*.

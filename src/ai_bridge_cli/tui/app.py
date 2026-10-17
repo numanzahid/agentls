@@ -30,7 +30,8 @@ from ..model import SORT_KEYS, Session
 from ..output import relative
 from ..scanners import history
 from ..textsafe import one_line, safe
-from .screens import ChoiceScreen, ConfirmScreen, HelpScreen, InputScreen, SettingsScreen, TrashScreen, plan_table
+from .screens import (ConfirmScreen, DeleteConfirmScreen, HelpScreen, InputScreen, RemoveScreen,
+                      SettingsScreen, TrashScreen, plan_table)
 
 AGENT_STYLE = {"claude": "#d97757", "codex": "#10a37f", "cursor": "#5b8def"}
 AGENT_SHORT = {"claude": "cl", "codex": "cx", "cursor": "cu"}
@@ -71,7 +72,7 @@ class SessionBrowser(App):
 
     BINDINGS = [
         *[Binding(str(n), f"focus_pane({n})", label, priority=True, show=False)
-          for n, label in enumerate(("Search", "Sessions", "Details", "Filters", "Settings"), 1)],
+          for n, label in enumerate(("Search", "Filters", "Session List", "Preview/Details", "Settings"), 1)],
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "help", "Help"),
         Binding("ctrl+s,f2", "settings", "Settings", priority=True),
@@ -136,7 +137,7 @@ class SessionBrowser(App):
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("1 Search · 2 Sessions · 3 Details · 4 Filters · 5 Settings", id="pane-nav")
+        yield Static("1 Search · 2 Filters · 3 Session List · 4 Preview/Details · 5 Settings", id="pane-nav")
         with Horizontal(id="filters"):
             yield Input(placeholder="Search title, project, ID, model…  ( / )", id="search")
             yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
@@ -528,7 +529,7 @@ class SessionBrowser(App):
 
     @on(Input.Submitted, "#search")
     def _search_done(self, event: Input.Submitted) -> None:
-        self.action_focus_pane(2)
+        self.action_focus_pane(3)
 
     @on(Select.Changed)
     def _filter(self, event: Select.Changed) -> None:
@@ -554,21 +555,21 @@ class SessionBrowser(App):
     def action_focus_pane(self, pane: int) -> None:
         if pane == 1:
             self.action_focus_search()
-        elif pane == 2:
+        elif pane == 3:
             self._q("#filters").remove_class("filters-open")
             if self.tier != "wide":
                 self.details_open = False
                 self._layout_side()
                 self._rebuild_table()
             self._q("#table", DataTable).focus()
-        elif pane == 3:
+        elif pane == 4:
             self._q("#filters").remove_class("filters-open")
             self.details_open = True
             self._layout_side()
             self._rebuild_table()
             self._q("#side").focus()
             self._schedule_preview()
-        elif pane == 4:
+        elif pane == 2:
             if self.tier != "wide":
                 self._q("#filters").add_class("filters-open")
             self._q("#agent", Select).focus()
@@ -583,9 +584,9 @@ class SessionBrowser(App):
         if self.focused is search:
             if search.value:
                 search.value = ""
-            self.action_focus_pane(2)
+            self.action_focus_pane(3)
         elif self._q("#filters").has_class("filters-open"):
-            self.action_focus_pane(2)
+            self.action_focus_pane(3)
         elif self.details_open and self.tier != "wide":
             self.action_toggle_details()
         elif self.marked:
@@ -802,8 +803,6 @@ class SessionBrowser(App):
             return
         count = len(sessions)
         what = f"{count} session(s)" if count > 1 else f"“{one_line(sessions[0].display_title, 60)}”"
-        agents = sorted({s.agent for s in sessions})
-        trash_hint = "; ".join(f"{a}: {trash.SUPPORT_NOTES[a]}" for a in agents)
 
         def chosen(choice):
             if choice == "archive":
@@ -812,11 +811,7 @@ class SessionBrowser(App):
                 self.notify("Preparing preview…", timeout=2, markup=False)
                 self.plan_delete(sessions)
 
-        self.push_screen(ChoiceScreen(
-            f"Remove {what}?",
-            [("archive", "Archive (recommended)", "Hide from listings. Reversible; native files untouched."),
-             ("trash", "Move to trash (native delete)…", "Shows a preview first. " + trash_hint),
-             ("cancel", "Cancel", "")]), chosen)
+        self.push_screen(RemoveScreen(f"Remove {what}?"), chosen)
 
     @work(thread=True, exclusive=True, group="action")
     def plan_delete(self, sessions: list[Session]) -> None:
@@ -832,10 +827,7 @@ class SessionBrowser(App):
         allowed = len(plan.allowed)
         title = (f"Move {allowed} of {len(plan.items)} session(s) to trash?" if allowed else
                  "Nothing can be deleted")
-        if not allowed:
-            self.push_screen(ConfirmScreen(title, plan_table(data), "OK"))
-            return
-        self.push_screen(ConfirmScreen(title, plan_table(data), "Move to trash", danger=True),
+        self.push_screen(DeleteConfirmScreen(title, plan_table(data), allowed=bool(allowed)),
                          lambda ok: self.run_delete(plan) if ok else None)
 
     @work(thread=True, exclusive=True, group="action")
