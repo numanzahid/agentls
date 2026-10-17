@@ -196,10 +196,10 @@ def test_ui_explains_managed_archive_and_blockers(managed):
     session, _, _, thread, *_ = managed
     console = Console(width=100, record=True)
     console.print(plan_table(trash.build_plan([session]).to_json()))
-    assert 'daemon will stay running' in console.export_text()
+    assert 'daemon will stay running' in ' '.join(console.export_text().split())
     thread['status'] = {'type': 'active'}
     console.print(plan_table(trash.build_plan([session]).to_json()))
-    assert 'inactivity could not be verified' in console.export_text()
+    assert 'inactivity could not be verified' in ' '.join(console.export_text().split())
 
 
 @pytest.fixture
