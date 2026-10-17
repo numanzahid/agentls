@@ -670,3 +670,115 @@ def test_native_delete_mixed_preview_only_moves_allowed_items(populated):
         assert len(batches) == 1 and len(batches[0]['items']) == 1
         assert batches[0]['items'][0]['session_id'] == CLAUDE_ID
     drive(scenario)
+
+
+def assert_focused_pane(app, selector, accent):
+    """Check computed CSS, not just focus bookkeeping or stylesheet text."""
+    for pane in ('#search', '#filter-controls', '#table', '#side'):
+        widget = app._q(pane)
+        if pane == selector:
+            assert widget.has_focus_within
+            assert widget.styles.border_top[1] == accent
+            assert widget.styles.border_title_color == accent
+            assert widget.styles.border_title_style.bold
+            assert widget.region.width > 0 and widget.region.height > 0
+        else:
+            assert not widget.has_focus_within
+            assert widget.styles.border_top[1] != accent
+
+
+@pytest.mark.parametrize('width', [40, 60, 100, 150])
+def test_pane_focus_css_tracks_hotkeys_and_nested_filters(populated, width):
+    async def scenario(app, pilot):
+        accent = app._q('#table').styles.border_top[1]
+        assert_focused_pane(app, '#table', accent)
+        for selector, title in (('#search', '1 Search'), ('#filter-controls', '2 Filters'),
+                                ('#table', '3 Session List'), ('#side', '4 Preview/Details')):
+            assert app._q(selector).border_title == title
+        await pilot.press('1')
+        await pilot.pause()
+        assert_focused_pane(app, '#search', accent)
+        await pilot.press('enter', '2')
+        await pilot.pause()
+        assert_focused_pane(app, '#filter-controls', accent)
+        for selector in ('#agent', '#origin', '#status', '#project'):
+            control = app._q(selector)
+            assert control.region.width > 0 and control.region.bottom <= 24
+            await pilot.press('enter')
+            await pilot.pause()
+            assert control.expanded and control.has_focus_within
+            assert_focused_pane(app, '#filter-controls', accent)
+            await pilot.press('escape', 'tab')
+        await pilot.press('3')
+        await pilot.pause()
+        assert_focused_pane(app, '#table', accent)
+        await pilot.press('4')
+        await pilot.pause()
+        assert_focused_pane(app, '#side', accent)
+        assert app._q('#side').region.bottom <= 24
+        if width < 130:
+            assert app._q('#side').has_class('full') and not app._q('#table').display
+        await pilot.press('3')
+        await pilot.pause()
+        assert_focused_pane(app, '#table', accent)
+    drive(scenario, size=(width, 24))
+
+
+@pytest.mark.parametrize('width', [40, 150])
+def test_pane_focus_css_tracks_clicks_without_marking_rows(populated, width):
+    async def scenario(app, pilot):
+        accent = app._q('#table').styles.border_top[1]
+        await pilot.click('#search')
+        await pilot.pause()
+        assert_focused_pane(app, '#search', accent)
+        # Open the narrow filter layout, then choose a control by mouse.
+        await pilot.press('enter', '2')
+        await pilot.click('#origin')
+        await pilot.pause()
+        assert_focused_pane(app, '#filter-controls', accent)
+        await pilot.press('escape', '3')
+        await pilot.click('#search')
+        await pilot.click('#table', offset=(4, 3))
+        await pilot.pause()
+        assert_focused_pane(app, '#table', accent)
+        assert not app.marked
+        await pilot.press('4')
+        # Static details content should focus its scrollable pane when clicked.
+        await pilot.click('#search')
+        await pilot.click('#details', offset=(2, 1))
+        await pilot.pause()
+        assert_focused_pane(app, '#side', accent)
+        assert not app.marked
+        await pilot.click('#search')
+        await pilot.pause()
+        assert_focused_pane(app, '#search', accent)
+    drive(scenario, size=(width, 24))
+
+
+@pytest.mark.parametrize('width', [40, 150])
+def test_selected_count_stays_prominent_and_separate_from_pane_focus(populated, width):
+    from rich.console import Console
+
+    async def scenario(app, pilot):
+        accent = app._q('#table').styles.border_top[1]
+        await pilot.press('space', 'space')
+        await pilot.pause()
+        status = app._q('#statusbar').content
+        assert status.plain.startswith(' 2 selected / 4 visible ')
+        assert status.get_style_at_offset(Console(), 1).reverse
+        assert_focused_pane(app, '#table', accent)
+        marked = set(app.marked)
+        await pilot.press('1')
+        await pilot.pause()
+        assert_focused_pane(app, '#search', accent)
+        assert app.marked == marked and app._q('#statusbar').content.plain == status.plain
+        # Filter down to a marked row: count only the visible action targets.
+        target = app.by_key[next(iter(marked))]
+        app._q('#search').value = target.session_id
+        await pilot.pause()
+        assert app._q('#statusbar').content.plain.startswith(' 1 selected / 1 visible ')
+        await pilot.press('escape', 'escape')
+        await pilot.pause()
+        assert not app.marked and 'selected' not in app._q('#statusbar').content.plain
+        assert_focused_pane(app, '#table', accent)
+    drive(scenario, size=(width, 24))

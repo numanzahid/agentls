@@ -20,14 +20,28 @@ Screen {
     border: tall $primary 40%;
 }
 
-#search:focus {
-    border: tall $accent;
+#filter-controls {
+    width: auto;
+    height: auto;
+    border: round $primary 40%;
+    margin-left: 1;
+}
+
+#search, #filter-controls, #table, #side {
+    border-title-color: $text-muted;
+    border-title-align: left;
+}
+
+#search:focus-within, #filter-controls:focus-within, #table:focus-within, #side:focus-within {
+    border: round $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
 }
 
 #filters Select {
     width: 18;
     margin-left: 1;
-    margin-top: 1;
+    margin-top: 0;
 }
 
 #filters #project {
@@ -39,6 +53,10 @@ Screen {
 }
 
 .narrow #filters Select {
+    display: none;
+}
+
+.narrow #filter-controls {
     display: none;
 }
 
@@ -56,6 +74,13 @@ Screen {
     layout: vertical;
 }
 
+.narrow #filters.filters-open #filter-controls, .medium #filters.filters-open #filter-controls {
+    display: block;
+    layout: vertical;
+    width: 1fr;
+    margin: 0;
+}
+
 .medium #filters.filters-open Select {
     width: 1fr;
     margin: 0;
@@ -69,19 +94,19 @@ Screen {
     width: 1fr;
     height: 1fr;
     scrollbar-gutter: stable;
+    border: round $primary 40%;
 }
 
 #side {
     width: 38%;
     min-width: 40;
     height: 1fr;
-    border-left: vkey $primary 30%;
+    border: round $primary 40%;
     padding: 0 1;
 }
 
 #side.full {
     width: 1fr;
-    border-left: none;
 }
 
 #details {

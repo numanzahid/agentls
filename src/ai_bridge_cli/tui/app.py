@@ -140,14 +140,15 @@ class SessionBrowser(App):
         yield Static("1 Search · 2 Filters · 3 Session List · 4 Preview/Details · 5 Settings", id="pane-nav")
         with Horizontal(id="filters"):
             yield Input(placeholder="Search title, project, ID, model…  ( / )", id="search")
-            yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
-                          ("Cursor", "cursor")], value="all", allow_blank=False, id="agent", compact=True)
-            yield Select([("Any origin", "all"), ("MCP (bridge)", "mcp"), ("Direct", "direct"),
-                          ("Unknown", "unknown")], value="all", allow_blank=False, id="origin", compact=True)
-            yield Select([("Any status", "all"), ("Active", "active"), ("Uncertain", "uncertain"),
-                          ("Recent", "recent"), ("Idle", "idle")], value="all", allow_blank=False, id="status",
-                         compact=True)
-            yield Select([("All projects", "all")], value="all", allow_blank=False, id="project", compact=True)
+            with Horizontal(id="filter-controls"):
+                yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
+                              ("Cursor", "cursor")], value="all", allow_blank=False, id="agent", compact=True)
+                yield Select([("Any origin", "all"), ("MCP (bridge)", "mcp"), ("Direct", "direct"),
+                              ("Unknown", "unknown")], value="all", allow_blank=False, id="origin", compact=True)
+                yield Select([("Any status", "all"), ("Active", "active"), ("Uncertain", "uncertain"),
+                              ("Recent", "recent"), ("Idle", "idle")], value="all", allow_blank=False, id="status",
+                             compact=True)
+                yield Select([("All projects", "all")], value="all", allow_blank=False, id="project", compact=True)
         with Horizontal(id="body"):
             yield DataTable(id="table", cursor_type="row", zebra_stripes=True)
             with VerticalScroll(id="side"):
@@ -158,6 +159,9 @@ class SessionBrowser(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        for selector, title in (("#search", "1 Search"), ("#filter-controls", "2 Filters"),
+                                ("#table", "3 Session List"), ("#side", "4 Preview/Details")):
+            self._q(selector).border_title = title
         if self.settings_error:
             self.notify(self.settings_error, severity="warning", markup=False, timeout=15)
         self._q("#table", DataTable).focus()
@@ -254,7 +258,7 @@ class SessionBrowser(App):
 
     # -- table --------------------------------------------------------------
     def _columns(self) -> list[tuple[str, str, int | None]]:
-        width = self.size.width
+        width = self.size.width - 2  # Session list border; widths below describe its content.
         if self.tier == "wide" and self.details_open:
             width -= max(40, int(width * 0.38))
         # Keep the title and model before secondary metadata. Reserve the gutter
@@ -363,9 +367,8 @@ class SessionBrowser(App):
         q = self.query_state
         marked = len(self.marked & {s.selector for s in self.shown})
         arrow = "↑" if q.reverse else "↓"
-        parts = [Text(f"{len(self.shown)}/{len(self.by_key)} sessions", style="bold")]
-        if marked:
-            parts.append(Text(f"{marked} marked", style="bold yellow"))
+        parts = ([Text(f" {marked} selected / {len(self.shown)} visible ", style="bold yellow reverse")]
+                 if marked else [Text(f"{len(self.shown)}/{len(self.by_key)} sessions", style="bold")])
         parts.append(Text(f"sort {q.sort}{arrow}"))
         if q.archived != "hide":
             parts.append(Text("showing archived", style="italic"))

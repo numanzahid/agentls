@@ -24,7 +24,7 @@ It is a standalone Python package. It never imports the ai-bridge server and wor
   ● claude  Fix the login bug      claude-sonnet-4-6     just now │ Last Model  gpt-5.4
     codex   Parser refactor        gpt-5.4               16m      │ Session     codex:01a1…
     cursor  Design chat            —                     1h       │ Last 40 messages …
- 99/100 sessions · 1 marked · sort updated↓ · 1 archived hidden (A) · provenance ok
+ 1 selected / 99 visible · sort updated↓ · 1 archived hidden (A) · provenance ok
  q Quit  ? Help  / Search  o Open  n Rename  a Archive  d Delete…  t Trash  s Sort  p Details  r Refresh
 ```
 
@@ -124,9 +124,14 @@ an empty store, or no matches are shown in place rather than as an empty table.
 
 The numbered navigation labels stay visible above the search bar. Digits type normally in
 search and other text inputs; press Enter or Esc to leave search before using them to navigate.
-Dialogs and expanded filter menus retain their own keyboard handling. `3` reveals hidden
-details; `2` returns to the session list on narrow terminals. `4` reveals all filters vertically
-when space is limited; `2`, `3` or Esc collapses them again.
+Dialogs and expanded filter menus retain their own keyboard handling. `4` reveals hidden
+details; `3` returns to the session list on narrow terminals. `2` reveals all filters vertically
+when space is limited; `3`, `4` or Esc collapses them again.
+
+Each pane has a numbered border heading. The focused pane's border and heading use the accent
+color, including while a filter dropdown is open. Yellow chat marks indicate selection;
+when rows are marked, the status bar starts with **N selected / N visible**, counting the
+visible sessions that actions will affect.
 
 Last Model uses Claude assistant message models (excluding sidechains and synthetic placeholders),
 Codex turn-context models, and Cursor chat metadata's `lastUsedModel`. Missing or invalid newer
