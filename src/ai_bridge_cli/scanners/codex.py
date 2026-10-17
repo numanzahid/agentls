@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from datetime import datetime
 from pathlib import Path
 
 from .. import paths
 from ..model import Session
 from ..textsafe import UUID_RE, is_uuid
-from .common import is_noise, iter_jsonl, model_name, tail_jsonl, tool_summary
+from .common import HEAD_BYTES, is_noise, iter_jsonl, model_name, tail_jsonl, tool_summary
 
 HEAD_LINES = 300
 
@@ -32,15 +33,22 @@ def files(root: Path | None = None, include_archived: bool = True) -> list[tuple
             for name in names:
                 if name.startswith("rollout-") and name.endswith(".jsonl"):
                     path = Path(directory) / name
-                    if not path.is_symlink():
-                        out.append((path, archived))
+                    try:
+                        if stat.S_ISREG(path.lstat().st_mode):
+                            out.append((path, archived))
+                    except OSError:
+                        continue
     return out
 
 
 def titles(root: Path | None = None) -> dict[str, str]:
     root = root or paths.codex_dir()
     out = {}
-    for entry in iter_jsonl(root / "session_index.jsonl"):
+    try:
+        entries = list(iter_jsonl(root / "session_index.jsonl", max_bytes=HEAD_BYTES * 4))
+    except (OSError, ValueError):
+        return out  # titles are cosmetic; an unsafe index is simply ignored
+    for entry in entries:
         if is_uuid(entry.get("id")) and entry.get("thread_name"):
             out[entry["id"]] = entry["thread_name"]  # later entries win (renames)
     return out
@@ -111,7 +119,7 @@ def parse(path: Path, root: Path, info: os.stat_result, archived: bool,
     sid = cwd = first = parent = None
     source = thread_source = None
     created = None
-    for entry in iter_jsonl(path, max_lines=HEAD_LINES):
+    for entry in iter_jsonl(path, max_lines=HEAD_LINES, max_bytes=HEAD_BYTES):
         payload = entry.get("payload") or {}
         if entry.get("type") == "session_meta":
             source = payload.get("source")

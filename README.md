@@ -33,20 +33,29 @@ Requires Linux and Python 3.12 or newer. The installer uses its own virtualenv a
 uses `sudo` or installs packages globally.
 
 ```bash
-git clone <this repo> ai-bridge-cli && cd ai-bridge-cli
+git clone https://github.com/numanzahid/ai-bridge-cli.git && cd ai-bridge-cli
 bash install.sh --dry-run      # show what would change (launchers, replacements)
 bash install.sh                # install or update
 ```
 
 What `install.sh` does:
 
-1. Builds a fresh virtualenv in `~/.local/share/ai-bridge-cli/venv.staging-*` from a clean
-   copy of the source, using the tested pins in `constraints.txt`.
-2. Smoke-tests it (version, TUI import, a headless listing), then swaps it in as
-   `~/.local/share/ai-bridge-cli/venv` and keeps the previous one as `venv.previous`.
-3. Installs two tiny launchers, `~/.local/bin/ai-bridge-cli` and `~/.local/bin/ai-bridge`, which
-   run `venv/bin/python -I -m ai_bridge_cli`. Their hashes are recorded in
-   `~/.local/share/ai-bridge-cli/launchers.json`.
+1. Runs a **read-only preflight** of the launcher plan and refuses before building anything if
+   `~/.local/bin/ai-bridge-cli` is a foreign file or `~/.local/bin` is unsafe.
+2. Builds a fresh virtualenv in `~/.local/share/ai-bridge-cli/venv.staging-*` from a clean
+   copy of the source, using the tested pins in `constraints.txt`, and smoke-tests it (version,
+   TUI import, a headless listing).
+3. Activates it in **one locked transaction** (`~/.local/share/ai-bridge-cli/.install.lock`; a
+   concurrent install or rollback is refused). The transaction repeats the preflight, swaps the
+   new venv in, keeps the previous one as `venv.previous`, and verifies the relocated venv. It then
+   installs two tiny launchers, `~/.local/bin/ai-bridge-cli` and `~/.local/bin/ai-bridge`, which run
+   `venv/bin/python -I -m ai_bridge_cli`. Every launcher change is journaled in
+   `~/.local/share/ai-bridge-cli/launchers.json` *before* it is published. If any step fails,
+   the previous launchers and the previous venv are put back. If the process is killed midway,
+   the next activation or rollback recovers the durable venv rename journal
+   (`venv-transaction.json`) before proceeding. Recovery can itself be interrupted and retried.
+   A rollback consumes `venv.previous`, so repeating it leaves the restored environment in place;
+   the displaced environment is retained as `venv.rolled-back-*` until uninstall.
 
 An existing `~/.local/bin/ai-bridge` is replaced **only** if it is one of:
 
@@ -126,6 +135,7 @@ ai-bridge sessions rename agent:UUID "New name" | --clear
 ai-bridge sessions archive|unarchive agent:UUID [agent:UUID ...]
 ai-bridge sessions delete agent:UUID [...] [--dry-run]           # preview, prints a plan id
 ai-bridge sessions delete agent:UUID [...] --yes --plan-id ID    # perform exactly that plan
+                        [--allow-uninspectable]                  # HIGH RISK, see "Archive vs. delete"
 ai-bridge sessions trash list | restore BATCH|codex:UUID [--session SEL] [--dry-run] | purge BATCH --yes
 ```
 
@@ -141,12 +151,11 @@ Anything that changes state requires the exact ID.
 | Origin | Meaning |
 | --- | --- |
 | **MCP** | A record exists, matches this exact agent and session ID, and is a private (0600), single-link regular file owned by you, reached without symlinks through private directories. JSON output also sets `bridge_origin: "mcp"`, as the server does. |
-| **Direct** | The provenance directory is valid and has no record for this session, or this account has no bridge state at all. |
-| **Unknown** | The record or directory failed any check, or the bridge has never created the provenance directory, so origin cannot be verified. |
+| **Direct** | *Proven* not MCP. Either this account has no ai-bridge state and no installation at all (checked with `lstat`), or there is no record, the session was created after the provenance epoch (the earliest verified `first_seen`, which shows recording was active), no bridge job references it, and every bridge job record could be read. |
+| **Unknown** | Everything else: no record but no proof (for example a session older than verified provenance recording, which may have been used through MCP before records existed); a record, directory or path component that fails any check, including dangling symlinks; or an installed bridge without a provenance directory. |
 
-A headless or exec launch mode is **never** treated as MCP evidence. Sessions created through the
-bridge before it began recording provenance appear as Direct. This tool never creates, locks or
-writes anything in the provenance directory.
+A headless or exec launch mode is **never** treated as MCP evidence. This tool never creates,
+locks or writes anything in the provenance directory.
 
 **Status** comes from one snapshot per refresh.
 
@@ -164,9 +173,22 @@ changes no native files. Aliases and archive flags live in `~/.local/state/ai-br
 Aliases and archive flags written by older ai-bridge CLIs in the server's state directory are
 still honoured, read-only.
 
-**Delete (move to trash)** is explicit. It always shows a preview first, then re-plans at
-execution time and refuses if anything changed: files (device, inode, size, mtime), activity, or
-blockers. It never unlinks anything.
+**Delete (move to trash)** is explicit. It always shows a preview first and never unlinks anything.
+
+* **Preview / plan.** Every file records its device, inode, type, size, mtime and ctime. Every
+  directory also records a bounded, non-following, recursive fingerprint of *every object inside*.
+  This catches in-place writes to `store.db` or its WAL and changes to nested Claude files even
+  when timestamps are forged. The newest mtime anywhere in the tree must be at least 2 minutes old.
+* **Execute.** Re-plans from scratch and requires the same plan ID. For each session it then
+  takes a fresh process snapshot, and immediately before each rename it re-validates the identity
+  and fingerprint. Renames use `renameat2(RENAME_NOREPLACE)` and **fail closed** where atomic
+  no-replace is unsupported (there is no check-then-rename fallback).
+* **Write-ahead journal.** Each entry is durably written to the batch manifest, with its stored
+  name and identity, *before* it is renamed: `planned → moving → in_trash`. The manifest, the
+  source directory and the trash directory are all fsynced. After a crash or failed write,
+  restore and purge first resolve every entry by locating the object physically, so nothing is
+  ever stranded untracked. Restore resumes partial and interrupted batches. Purge refuses any
+  batch with unresolved or partially restored sessions.
 
 | Agent | Method | Restore |
 | --- | --- | --- |
@@ -176,15 +198,29 @@ blockers. It never unlinks anything.
 
 Delete refuses when any of these hold:
 
-* the session is active, uncertain, has unfinished bridge jobs, or was modified in the last 2 minutes;
+* the session is active, uncertain or recent, has unfinished bridge jobs, or anything in it was
+  modified in the last 2 minutes;
+* process inspection is incomplete. This covers `/proc` unavailable, `/proc/locks` or a command
+  line unreadable, an unreadable Claude session-registry entry, and a same-user process whose
+  open files cannot be listed (non-dumpable processes, for example running `codex`). A
+  reported allow-list of session managers (`(sd-pam)`, `sshd`, `sshd-session`, `systemd`) is
+  tolerated. `sessions delete --allow-uninspectable` overrides this as an explicit, high-risk
+  choice that is recorded in the plan ID; the TUI never overrides it;
+* any bridge job record is unreadable, or an unfinished bridge job of the same agent has no known
+  session yet;
+* a directory contains symlinks, special files or foreign-owned files, or has more than 20,000 entries;
 * a path is a symlink, a hard link, a special file, not yours, outside the configured store, or
   reached through a symlink below the store root (every component is opened with `O_NOFOLLOW`);
 * the trash is on a different filesystem, because moves must be atomic renames and there is no
   copy-then-delete;
 * the session ID is ambiguous.
 
-`trash purge BATCH --yes` permanently removes one batch; it is the only real deletion, and only
-of data this tool moved. Purging leaves Codex items archived by Codex.
+`trash purge BATCH --yes` permanently removes one fully resolved batch. It is the only real
+deletion, and only of data this tool moved. Purging leaves Codex items archived by Codex.
+
+All native-store reads are bounded and opened `O_NOFOLLOW|O_NONBLOCK`, and must be regular
+files. A FIFO, device or symlink named like a session cannot hang or redirect a scan. One
+unreadable file becomes one error row; it never hides the rest of its agent.
 
 ## Opening sessions
 

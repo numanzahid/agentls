@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -69,11 +70,15 @@ def connect_readonly(db: Path) -> sqlite3.Connection:
     opened immutable, so SQLite does not even touch the -shm index; otherwise
     mode=ro is required to see committed WAL frames (shm may be mapped)."""
     db = Path(db)
-    if db.is_symlink():
-        raise ValueError('Cursor store is a symlink; refusing to open it.')
+    # SQLite would block on a FIFO and follow symlinks; only regular files are opened.
+    if not stat.S_ISREG(db.lstat().st_mode):
+        raise ValueError('Cursor store is not a regular file; refusing to open it.')
     wal = db.with_name(db.name + '-wal')
     try:
-        wal_size = wal.lstat().st_size
+        wal_info = wal.lstat()
+        if not stat.S_ISREG(wal_info.st_mode):
+            raise ValueError('Cursor WAL is not a regular file; refusing to open the store.')
+        wal_size = wal_info.st_size
     except FileNotFoundError:
         wal_size = 0
     query = 'mode=ro&immutable=1' if wal_size == 0 else 'mode=ro'

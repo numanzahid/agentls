@@ -5,13 +5,14 @@ Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
 from __future__ import annotations
 
 import os
+import stat
 from datetime import datetime
 from pathlib import Path
 
 from .. import paths
 from ..model import Session
 from ..textsafe import is_uuid
-from .common import blocks_text, is_noise, iter_jsonl, model_name, tail_jsonl
+from .common import HEAD_BYTES, blocks_text, is_noise, iter_jsonl, model_name, tail_jsonl
 
 HEAD_LINES = 400
 
@@ -32,6 +33,13 @@ def _timestamp(value) -> float | None:
         return None
 
 
+def _regular(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
 def files(root: Path | None = None) -> list[Path]:
     root = root or paths.claude_dir()
     projects = root / "projects"
@@ -43,7 +51,8 @@ def files(root: Path | None = None) -> list[Path]:
     for project in project_dirs:
         try:
             for entry in project.iterdir():
-                if entry.suffix == ".jsonl" and is_uuid(entry.stem) and not entry.is_symlink():
+                # lstat: symlinks, FIFOs and devices named like transcripts are never opened.
+                if entry.suffix == ".jsonl" and is_uuid(entry.stem) and _regular(entry):
                     out.append(entry)
         except OSError:
             continue
@@ -56,7 +65,7 @@ def parse(path: Path, root: Path, info: os.stat_result) -> Session:
     created = None
     mode, source = "unknown", None
     count = 0
-    for entry in iter_jsonl(path, max_lines=HEAD_LINES):
+    for entry in iter_jsonl(path, max_lines=HEAD_LINES, max_bytes=HEAD_BYTES):
         if entry.get("type") in ("summary", "custom-title"):
             title = entry.get("customTitle") or entry.get("summary") or title
         if entry.get("isSidechain"):

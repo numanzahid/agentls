@@ -18,6 +18,7 @@ from textual import on, work
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Input, Select, Static
 
 from .. import native, paths, trash
@@ -99,6 +100,21 @@ class SessionBrowser(App):
         self._preview_key: str | None = None
         self._refresh_lock = threading.Lock()
 
+    def _q(self, selector: str, expect=None):
+        """Main-screen widgets, even while a modal is on top (App.query_one uses the active screen)."""
+        screen = self.screen_stack[0] if self.screen_stack else self.screen
+        return screen.query_one(selector, expect) if expect is not None else screen.query_one(selector)
+
+    def _alive(self) -> bool:
+        """Timers/worker callbacks may land during shutdown, after widgets are gone."""
+        if not self.is_running or not self.screen_stack:
+            return False
+        try:
+            self._q("#table", DataTable)
+            return True
+        except NoMatches:
+            return False
+
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
@@ -122,7 +138,7 @@ class SessionBrowser(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#table", DataTable).focus()
+        self._q("#table", DataTable).focus()
         self._apply_tier(force=True)
         self.refresh_catalog(initial=True)
         if self.periodic_refresh:
@@ -147,7 +163,7 @@ class SessionBrowser(App):
             self._rebuild_table()
 
     def _layout_side(self) -> None:
-        side, table = self.query_one("#side"), self.query_one("#table", DataTable)
+        side, table = self._q("#side"), self._q("#table", DataTable)
         if self.tier == "wide":
             side.display = self.details_open
             table.display = True
@@ -172,10 +188,14 @@ class SessionBrowser(App):
         self.call_from_thread(self._refresh_done, error, quiet, sessions)
 
     def _set_scanning(self, value: bool) -> None:
+        if not self._alive():
+            return
         self.scanning = value
         self._update_status()
 
     def _refresh_done(self, error: str | None, quiet: bool, sessions: list[Session] | None = None) -> None:
+        if not self._alive():
+            return
         self.scanning = False
         if error:
             self.last_error = error
@@ -200,7 +220,7 @@ class SessionBrowser(App):
             self.refresh_catalog(quiet=True)
 
     def _update_project_options(self) -> None:
-        select = self.query_one("#project", Select)
+        select = self._q("#project", Select)
         current = select.value
         projects = self.catalog.projects()
         options = [("All projects", "all")] + [(one_line(home_short(p), 60), p) for p in projects]
@@ -212,7 +232,7 @@ class SessionBrowser(App):
 
     # -- table --------------------------------------------------------------
     def _columns(self) -> list[tuple[str, str, int | None]]:
-        width = max(40, self.query_one("#body").size.width or self.size.width)
+        width = max(40, self._q("#body").size.width or self.size.width)
         if self.tier == "wide":
             width = int(width * 0.62)
         if self.tier == "narrow":
@@ -259,7 +279,7 @@ class SessionBrowser(App):
         return title
 
     def _rebuild_table(self) -> None:
-        table = self.query_one("#table", DataTable)
+        table = self._q("#table", DataTable)
         current = self._current_key()
         try:  # query the app-thread snapshot, never the catalog a worker may be refreshing
             self.shown = self.catalog.query(self.query_state, list(self.by_key.values()))
@@ -283,7 +303,7 @@ class SessionBrowser(App):
 
     def _refresh_rows(self, keys: set[str]) -> None:
         """Re-render only some rows (marks, alias, archive) without rebuilding."""
-        table = self.query_one("#table", DataTable)
+        table = self._q("#table", DataTable)
         now = time.time()
         columns = [c[0] for c in self._columns()]
         for key in keys:
@@ -295,7 +315,7 @@ class SessionBrowser(App):
         self._update_status()
 
     def _update_empty(self) -> None:
-        empty = self.query_one("#empty", Static)
+        empty = self._q("#empty", Static)
         if self.shown:
             empty.display = False
             return
@@ -337,11 +357,11 @@ class SessionBrowser(App):
             parts.append(Text("⚠ refresh failed", style="bold red"))
         if self.scanning:
             parts.append(Text("scanning…", style="italic cyan"))
-        self.query_one("#statusbar", Static).update(Text(" · ").join(parts))
+        self._q("#statusbar", Static).update(Text(" · ").join(parts))
 
     # -- selection & preview ------------------------------------------------
     def _current_key(self) -> str | None:
-        table = self.query_one("#table", DataTable)
+        table = self._q("#table", DataTable)
         if not table.row_count:
             return None
         try:
@@ -381,6 +401,8 @@ class SessionBrowser(App):
             self._rebuild_table()
 
     def _schedule_preview(self) -> None:
+        if not self._alive():
+            return
         session = self.current()
         self._render_details(session)
         if self._preview_timer:
@@ -390,12 +412,14 @@ class SessionBrowser(App):
         self._preview_timer = self.set_timer(0.15, lambda: self._start_preview(session))
 
     def _start_preview(self, session: Session) -> None:
+        if not self._alive():
+            return
         cache_key = (session.selector, session.updated, session.storage_path)
         self._preview_key = session.selector
         if cache_key in self._preview_cache:
             self._render_preview(session, self._preview_cache[cache_key])
             return
-        self.query_one("#preview", Static).update(Text("Loading preview…", style="dim italic"))
+        self._q("#preview", Static).update(Text("Loading preview…", style="dim italic"))
         self.load_preview(session, cache_key)
 
     @work(thread=True, exclusive=True, group="preview")
@@ -407,15 +431,17 @@ class SessionBrowser(App):
         self.call_from_thread(self._preview_loaded, session, cache_key, messages)
 
     def _preview_loaded(self, session: Session, cache_key: tuple, messages) -> None:
+        if not self._alive():
+            return
         self._preview_cache[cache_key] = messages
         if self._preview_key == session.selector:
             self._render_preview(session, messages)
 
     def _render_details(self, s: Session | None) -> None:
-        details = self.query_one("#details", Static)
+        details = self._q("#details", Static)
         if s is None:
             details.update(Text("No session selected.", style="dim"))
-            self.query_one("#preview", Static).update("")
+            self._q("#preview", Static).update("")
             return
         grid = Table.grid(padding=(0, 1), expand=True)
         grid.add_column(style="bold", no_wrap=True)
@@ -449,7 +475,7 @@ class SessionBrowser(App):
         details.update(grid)
 
     def _render_preview(self, s: Session, messages) -> None:
-        preview = self.query_one("#preview", Static)
+        preview = self._q("#preview", Static)
         if isinstance(messages, str):
             preview.update(Text(messages, style="red"))
             return
@@ -478,7 +504,7 @@ class SessionBrowser(App):
 
     @on(Input.Submitted, "#search")
     def _search_done(self, event: Input.Submitted) -> None:
-        self.query_one("#table", DataTable).focus()
+        self._q("#table", DataTable).focus()
 
     @on(Select.Changed)
     def _filter(self, event: Select.Changed) -> None:
@@ -495,14 +521,14 @@ class SessionBrowser(App):
 
     # -- actions: navigation ------------------------------------------------
     def action_focus_search(self) -> None:
-        self.query_one("#search", Input).focus()
+        self._q("#search", Input).focus()
 
     def action_escape(self) -> None:
-        search = self.query_one("#search", Input)
+        search = self._q("#search", Input)
         if self.focused is search:
             if search.value:
                 search.value = ""
-            self.query_one("#table", DataTable).focus()
+            self._q("#table", DataTable).focus()
         elif self.details_open and self.tier != "wide":
             self.action_toggle_details()
         elif self.marked:
@@ -539,8 +565,8 @@ class SessionBrowser(App):
     def action_toggle_details(self) -> None:
         self.details_open = not self.details_open
         self._layout_side()
-        (self.query_one("#side") if self.details_open and self.tier != "wide"
-         else self.query_one("#table", DataTable)).focus()
+        (self._q("#side") if self.details_open and self.tier != "wide"
+         else self._q("#table", DataTable)).focus()
         self._schedule_preview()
 
     def action_copy_id(self) -> None:
@@ -555,7 +581,7 @@ class SessionBrowser(App):
             return
         self.marked.symmetric_difference_update({s.selector})
         self._refresh_rows({s.selector})
-        table = self.query_one("#table", DataTable)
+        table = self._q("#table", DataTable)
         if table.cursor_row < table.row_count - 1:
             table.move_cursor(row=table.cursor_row + 1)
 

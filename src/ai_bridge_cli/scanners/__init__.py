@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .. import paths
 from ..model import Session
+from ..textsafe import UUID_RE
 from . import claude, codex, cursor
 
 
@@ -32,11 +33,16 @@ class Scanner:
     def __init__(self):
         self._cache: dict[tuple, tuple[tuple, Session | None]] = {}
 
-    def _cached(self, key: tuple, fingerprint: tuple, build):
+    def _cached(self, key: tuple, fingerprint: tuple, build, broken=None):
         hit = self._cache.get(key)
         if hit and hit[0] == fingerprint:
             return hit[1]
-        value = build()
+        try:
+            value = build()
+        except Exception as error:  # one unreadable/hostile file = one error row
+            if broken is None:
+                raise
+            value = broken(f"{type(error).__name__}: {error}"[:300])
         self._cache[key] = (fingerprint, value)
         return value
 
@@ -44,11 +50,12 @@ class Scanner:
         out = []
         for path in claude.files(root):
             try:
-                info = path.stat()
+                info = path.lstat()
             except OSError:
                 continue
             out.append(self._cached(("claude", str(path)), _stat_key(info),
-                                    lambda: claude.parse(path, root, info)))
+                                    lambda: claude.parse(path, root, info),
+                                    lambda error: _broken("claude", path.stem, path, root, info, error)))
         return out
 
     def _codex(self, root: Path, include_archived: bool) -> list[Session]:
@@ -68,11 +75,14 @@ class Scanner:
         out = []
         for path, archived in codex.files(root, include_archived):
             try:
-                info = path.stat()
+                info = path.lstat()
             except OSError:
                 continue
+            match = UUID_RE.search(path.name)
             out.append(self._cached(("codex", str(path)), (_stat_key(info), index_key, archived),
-                                    lambda: codex.parse(path, root, info, archived, titles())))
+                                    lambda: codex.parse(path, root, info, archived, titles()),
+                                    lambda error: _broken("codex", match.group(0) if match else path.stem,
+                                                          path, root, info, error, archived)))
         return out
 
     def _cursor(self, root: Path) -> list[Session]:
@@ -80,7 +90,9 @@ class Scanner:
         for chat in cursor.chat_dirs(root):
             try:
                 session = self._cached(("cursor", str(chat)), cursor.fingerprint(chat),
-                                       lambda: cursor.parse(chat, root))
+                                       lambda: cursor.parse(chat, root),
+                                       lambda error: _broken("cursor", chat.name, chat / "store.db", root,
+                                                             None, error))
             except OSError:
                 continue
             if session is not None:
@@ -109,6 +121,13 @@ class Scanner:
         _mark_duplicates(result.sessions)
         result.seconds = time.monotonic() - started
         return result
+
+
+def _broken(agent, sid, path, root, info, error, archived=False) -> Session:
+    return Session(agent=agent, session_id=sid, storage_path=str(path), storage_root=str(root),
+                   title="(unreadable session)", updated=info.st_mtime if info else 0.0, error=error,
+                   resumable=False, resume_note="Session file could not be read safely.",
+                   native_archived=archived)
 
 
 def _mark_duplicates(sessions: list[Session]) -> None:

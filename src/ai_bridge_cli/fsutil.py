@@ -139,6 +139,7 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp, path)
+        fsync_dir(path.parent)  # the rename itself must survive a crash
     finally:
         try:
             os.unlink(tmp)
@@ -167,7 +168,7 @@ def identity(info: os.stat_result) -> dict:
     """Fields that must be unchanged between a preview and a mutation."""
     return {"dev": info.st_dev, "ino": info.st_ino, "mode": stat.S_IFMT(info.st_mode),
             "size": info.st_size if stat.S_ISREG(info.st_mode) else None,
-            "mtime_ns": info.st_mtime_ns, "uid": info.st_uid}
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns, "uid": info.st_uid}
 
 
 def private_primary_group(owner: int, gid: int) -> bool:
@@ -214,24 +215,110 @@ def not_writable_by_others(path: Path, info: os.stat_result | None = None) -> bo
 _RENAME_NOREPLACE = 1
 
 
-def rename_noreplace(src_fd: int, src: str, dst_fd: int, dst: str) -> None:
-    """renameat2(RENAME_NOREPLACE): fail instead of replacing an existing target.
+class NoReplaceUnsupported(OSError):
+    pass
 
-    Falls back to check-then-rename only where the kernel/filesystem lacks
-    renameat2 support (the window is then a few microseconds).
-    """
+
+def _renameat2():
     import ctypes
     libc = ctypes.CDLL(None, use_errno=True)
-    fn = getattr(libc, "renameat2", None)
-    if fn is not None:
-        if fn(src_fd, os.fsencode(src), dst_fd, os.fsencode(dst), _RENAME_NOREPLACE) == 0:
-            return
-        code = ctypes.get_errno()
-        if code not in (errno.ENOSYS, errno.EINVAL):
-            raise OSError(code, os.strerror(code), dst)
+    return getattr(libc, "renameat2", None), ctypes
+
+
+def rename_noreplace(src_fd: int, src: str, dst_fd: int, dst: str) -> None:
+    """renameat2(RENAME_NOREPLACE): atomic, never replaces an existing target.
+
+    Fails closed: if the kernel, libc or filesystem cannot do an atomic
+    no-replace rename, nothing is moved (no check-then-rename fallback).
+    """
+    fn, ctypes = _renameat2()
+    if fn is None:
+        raise NoReplaceUnsupported(errno.ENOSYS, "atomic no-replace rename (renameat2) is unavailable", dst)
+    if fn(src_fd, os.fsencode(src), dst_fd, os.fsencode(dst), _RENAME_NOREPLACE) == 0:
+        return
+    code = ctypes.get_errno()
+    if code == errno.EEXIST:
+        raise FileExistsError(code, os.strerror(code), dst)
+    if code in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
+        raise NoReplaceUnsupported(code, "atomic no-replace rename is unsupported here", dst)
+    raise OSError(code, os.strerror(code), dst)
+
+
+def fsync_dir(fd_or_path) -> None:
+    if isinstance(fd_or_path, int):
+        os.fsync(fd_or_path)
+        return
+    fd = os.open(fd_or_path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        os.stat(dst, dir_fd=dst_fd, follow_symlinks=False)
-        raise FileExistsError(errno.EEXIST, "target exists", dst)
-    except FileNotFoundError:
-        pass
-    os.rename(src, dst, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def open_regular(path, *, dir_fd: int | None = None) -> tuple[int, os.stat_result]:
+    """Open for reading without following a final symlink or blocking on a FIFO;
+    refuse anything that is not a regular file."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise UnsafePath(f"not a regular file: {path}")
+        os.set_blocking(fd, True)
+        return fd, info
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_regular(path, max_bytes: int, *, dir_fd: int | None = None) -> bytes:
+    fd, info = open_regular(path, dir_fd=dir_fd)
+    with os.fdopen(fd, "rb") as stream:
+        if info.st_size > max_bytes:
+            raise UnsafePath(f"file exceeds {max_bytes} bytes: {path}")
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise UnsafePath(f"file exceeds {max_bytes} bytes: {path}")
+    return data
+
+
+class TreeTooLarge(UnsafePath):
+    pass
+
+
+def tree_fingerprint(dir_fd: int, max_entries: int = 20000, max_depth: int = 32) -> dict:
+    """Every object below an open directory, without following symlinks.
+
+    Returns {"entries": [(relpath, mode, dev, ino, size, mtime_ns, ctime_ns), ...],
+    "newest_mtime": float, "foreign_owner": bool, "special": [relpaths]}. In-place
+    file changes (size/mtime/ctime) anywhere in the tree change the result.
+    """
+    entries: list[tuple] = []
+    newest = os.fstat(dir_fd).st_mtime
+    foreign, special = False, []
+
+    def walk(fd: int, prefix: str, depth: int) -> None:
+        nonlocal newest, foreign
+        if depth > max_depth:
+            raise TreeTooLarge(f"directory deeper than {max_depth} levels")
+        with os.scandir(fd) as it:
+            names = sorted(e.name for e in it)
+        for name in names:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            rel = f"{prefix}{name}"
+            entries.append((rel, info.st_mode, info.st_dev, info.st_ino,
+                            info.st_size if stat.S_ISREG(info.st_mode) else 0, info.st_mtime_ns, info.st_ctime_ns))
+            if len(entries) > max_entries:
+                raise TreeTooLarge(f"more than {max_entries} files to verify")
+            newest = max(newest, info.st_mtime)
+            foreign |= info.st_uid != uid()
+            if stat.S_ISDIR(info.st_mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                try:
+                    walk(child, rel + "/", depth + 1)
+                finally:
+                    os.close(child)
+            elif not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                special.append(rel)
+
+    walk(dir_fd, "", 1)
+    return {"entries": entries, "newest_mtime": newest, "foreign_owner": foreign, "special": special}

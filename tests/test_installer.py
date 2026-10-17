@@ -160,3 +160,57 @@ def test_install_script_is_valid_bash():
     text = script.read_text()
     assert "sudo " not in text.replace("no sudo", "") and "systemctl" not in text
     assert "pip install --user" not in text and "--break-system-packages" not in text
+
+
+@pytest.mark.parametrize("passwd_alias", [False, True])
+def test_home_alias_uses_same_canonical_layout_before_staging(tmp_path, passwd_alias):
+    real = tmp_path / "real-home"
+    real.mkdir()
+    alias = tmp_path / "home-alias"
+    alias.symlink_to(real, target_is_directory=True)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    calls = tmp_path / "python-calls"
+    passwd_home = alias if passwd_alias else real
+    scripts = {
+        "id": '#!/bin/sh\ncase "$1" in -u) echo 1234;; -un) echo testuser;; esac\n',
+        "getent": f"#!/bin/sh\necho 'testuser:x:1234:1234:test:{passwd_home}:/bin/sh'\n",
+        "test-python": '#!/bin/sh\nprintf "%s\\n" "$@" >> "$CALLS"\n',
+    }
+    for name, text in scripts.items():
+        path = commands / name
+        path.write_text(text)
+        path.chmod(0o755)
+    script = Path(__file__).parents[1] / "install.sh"
+    proc = subprocess.run(["bash", str(script), "--dry-run", "--python", str(commands / "test-python")],
+                          env={**os.environ, "HOME": str(alias), "PATH": f"{commands}:{os.environ['PATH']}",
+                               "CALLS": str(calls)}, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    expected = installer.Layout(passwd_home).venv / "bin/python"
+    assert str(expected) in calls.read_text().splitlines()
+    assert str(alias / ".local/share/ai-bridge-cli/venv/bin/python") not in calls.read_text().splitlines()
+    assert not (real / ".local").exists()
+
+
+@pytest.mark.parametrize("journal", ["absent", "present", "dangling"])
+def test_shell_cleanup_preserves_journaled_stage(tmp_path, journal):
+    script = (Path(__file__).parents[1] / "install.sh").read_text()
+    cleanup = script[script.index("cleanup() {"):script.index("\ntrap cleanup EXIT")]
+    data = tmp_path / "data"
+    data.mkdir()
+    stage = data / "venv.staging-test"
+    stage.mkdir()
+    (stage / "KEEP").write_text("staged")
+    build = tmp_path / "build"
+    build.mkdir()
+    path = data / "venv-transaction.json"
+    if journal == "present":
+        path.write_text("{}")
+    elif journal == "dangling":
+        path.symlink_to(data / "missing")
+    proc = subprocess.run(["bash", "-euc", cleanup + "\ncleanup"],
+                          env={**os.environ, "DATA_DIR": str(data), "STAGE": str(stage), "BUILD": str(build)},
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert stage.exists() == (journal != "absent")
+    assert not build.exists()

@@ -5,14 +5,14 @@ Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
 """
 from __future__ import annotations
 
-import json
 import os
+import stat
 from pathlib import Path
 
 from .. import paths
 from ..model import Session
 from ..textsafe import is_uuid
-from .common import model_name
+from .common import model_name, read_json_file
 from .cursor_store import Store
 
 
@@ -27,9 +27,11 @@ def chat_dirs(root: Path | None = None) -> list[Path]:
         try:
             for chat in bucket.iterdir():
                 if is_uuid(chat.name) and chat.is_dir() and not chat.is_symlink():
-                    db = chat / "store.db"
-                    if db.is_file() and not db.is_symlink():
-                        out.append(chat)
+                    try:
+                        if stat.S_ISREG((chat / "store.db").lstat().st_mode):
+                            out.append(chat)
+                    except OSError:
+                        continue
         except OSError:
             continue
     return out
@@ -49,10 +51,7 @@ def fingerprint(chat: Path) -> tuple:
 
 def _meta_json(chat: Path) -> dict:
     try:
-        path = chat / "meta.json"
-        if path.is_symlink() or path.stat().st_size > 65536:
-            return {}
-        value = json.loads(path.read_text())
+        value = read_json_file(chat / "meta.json")
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -61,7 +60,9 @@ def _meta_json(chat: Path) -> dict:
 def parse(chat: Path, root: Path) -> Session | None:
     """None for subagent chats (they are internal to a parent chat)."""
     db = chat / "store.db"
-    info = db.stat()
+    info = db.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Cursor store is not a regular file.")
     side = _meta_json(chat)
     if side.get("isSubagent"):
         return None
@@ -69,7 +70,7 @@ def parse(chat: Path, root: Path) -> Session | None:
     if isinstance(side.get("updatedAtMs"), (int, float)):
         updated = max(updated, side["updatedAtMs"] / 1000)
     try:
-        updated = max(updated, (chat / "store.db-wal").stat().st_mtime)
+        updated = max(updated, (chat / "store.db-wal").lstat().st_mtime)
     except OSError:
         pass
     session = Session(

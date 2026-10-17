@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 import fixtures  # noqa: E402
+from ai_bridge_cli import activity as _activity  # noqa: E402
+
+REAL_SNAPSHOT = _activity.snapshot  # for tests that probe the real (or a fake) /proc
 
 CLAUDE_ID = "5c1f0e2a-7b3d-4c9e-8a61-2f4d9b0c7e13"
 CODEX_ID = "01a00000-0000-7000-8000-000000000001"

@@ -3,9 +3,9 @@
 #
 #   bash install.sh [--dry-run] [--no-replace-ai-bridge] [--accept-main-record] [--python PY]
 #   bash install.sh --rollback     restore the ai-bridge server's original `ai-bridge` launcher
-#                                  and the previous ai-bridge-cli virtualenv (if any)
+#                                  and swap back the previous ai-bridge-cli virtualenv (if any)
 #   bash install.sh --uninstall    remove ai-bridge-cli launchers + virtualenvs (restores the
-#                                  server launcher if it was replaced; trash/state are kept)
+#                                  server launcher if it was replaced; trash, backups, state kept)
 #   bash install.sh --status       show what owns ~/.local/bin/ai-bridge{,-cli}
 #
 # Never uses sudo, never pip-installs globally, never touches the ai-bridge MCP
@@ -14,8 +14,6 @@ set -euo pipefail
 umask 022
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="${HOME}/.local/share/ai-bridge-cli"
-VENV="$DATA_DIR/venv"
 INSTALLER="$SRC_DIR/src/ai_bridge_cli/installer.py"
 CONSTRAINTS="$SRC_DIR/constraints.txt"
 
@@ -43,6 +41,11 @@ done
 [ "$(id -u)" -ne 0 ] || die "Run as your normal user, not root (no sudo needed)."
 PW_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
 [ -n "$PW_HOME" ] && [ "$(realpath "$HOME")" = "$(realpath "$PW_HOME")" ] || die "HOME must be your passwd home ($PW_HOME)."
+# Match Layout: never stage through a HOME alias with a different lexical path.
+CANONICAL_HOME="$(realpath -e "$PW_HOME")" || die "Cannot resolve passwd home."
+[ -d "$CANONICAL_HOME" ] || die "Passwd home must be a directory."
+DATA_DIR="$CANONICAL_HOME/.local/share/ai-bridge-cli"
+VENV="$DATA_DIR/venv"
 
 find_python() {
   local candidate
@@ -61,31 +64,19 @@ launchers() { "$PY" -I "$INSTALLER" "$@"; }
 
 case "$MODE" in
   status) launchers status; exit 0 ;;
-  rollback)
-    launchers rollback ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
-    if [ -d "$DATA_DIR/venv.previous" ] && [ "$DRY_RUN" -eq 0 ]; then
-      say "Restoring previous ai-bridge-cli virtualenv"
-      rm -rf "$DATA_DIR/venv.rollback-tmp"
-      [ -d "$VENV" ] && mv "$VENV" "$DATA_DIR/venv.rollback-tmp"
-      mv "$DATA_DIR/venv.previous" "$VENV"
-      [ -d "$DATA_DIR/venv.rollback-tmp" ] && mv "$DATA_DIR/venv.rollback-tmp" "$DATA_DIR/venv.previous"
-    fi
-    say "Rollback complete. ~/.local/bin/ai-bridge-cli (if present) still uses $VENV."
-    exit 0 ;;
-  uninstall)
-    launchers uninstall ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
-    if [ "$DRY_RUN" -eq 0 ]; then
-      # Build artifacts only; aliases (~/.local/state/ai-bridge-cli) and trash are kept.
-      rm -rf "$VENV" "$DATA_DIR/venv.previous" "$DATA_DIR"/venv.staging-*
-      say "Removed virtualenvs. Kept: $DATA_DIR/trash, $DATA_DIR/backups, ~/.local/state/ai-bridge-cli"
-    fi
-    exit 0 ;;
+  # Both take the installer lock and verify ownership before touching anything.
+  rollback) launchers rollback ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}; exit 0 ;;
+  uninstall) launchers uninstall ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}; exit 0 ;;
 esac
 
 [ -f "$SRC_DIR/pyproject.toml" ] && [ -f "$INSTALLER" ] || die "Run install.sh from the ai-bridge-cli source tree."
+
+# Read-only preflight first: refuse before building anything if the launchers
+# could not be installed safely.
+say "Preflight (read-only)"
+launchers preflight --venv-python "$VENV/bin/python" ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "Dry run: would build $VENV with $("$PY" -V 2>&1); launcher plan:"
-  launchers install --venv-python "$VENV/bin/python" ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
+  say "Dry run: would build $VENV with $("$PY" -V 2>&1) and apply the plan above. Nothing was changed."
   exit 0
 fi
 
@@ -93,7 +84,14 @@ mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR"
 STAGE="$(mktemp -d "$DATA_DIR/venv.staging-XXXXXX")"
 BUILD="$(mktemp -d)"
-cleanup() { rm -rf "$BUILD"; if [ -n "${STAGE:-}" ]; then rm -rf "$STAGE"; fi; }
+cleanup() {
+  rm -rf "$BUILD"
+  # Recovery may still need this stage, including after the installer was killed.
+  if [ -n "${STAGE:-}" ] && [ -d "$STAGE" ] &&
+     [ ! -e "$DATA_DIR/venv-transaction.json" ] && [ ! -L "$DATA_DIR/venv-transaction.json" ]; then
+    rm -rf "$STAGE"
+  fi
+}
 trap cleanup EXIT
 
 say "Creating virtualenv with $("$PY" -V 2>&1)"
@@ -102,29 +100,18 @@ say "Creating virtualenv with $("$PY" -V 2>&1)"
 tar -C "$SRC_DIR" --exclude=.git --exclude=.venv --exclude='*.egg-info' --exclude=__pycache__ \
     --exclude=build --exclude=dist -cf - . | tar -C "$BUILD" -xf -
 say "Installing ai-bridge-cli and pinned dependencies into the staging virtualenv"
-PIP=("$STAGE/bin/python" -m pip --disable-pip-version-check --no-input -q)
-"${PIP[@]}" install ${CONSTRAINTS:+-c "$CONSTRAINTS"} "$BUILD"
+"$STAGE/bin/python" -m pip --disable-pip-version-check --no-input -q install -c "$CONSTRAINTS" "$BUILD"
 
-say "Smoke test"
+say "Smoke test (staging)"
 "$STAGE/bin/python" -I -m ai_bridge_cli --version
 "$STAGE/bin/python" -I -c 'import ai_bridge_cli.tui.app' || die "TUI import failed; nothing was changed."
 "$STAGE/bin/python" -I -m ai_bridge_cli sessions list --limit 1 --json >/dev/null \
   || die "Headless listing failed; nothing was changed."
 
-say "Activating new virtualenv"
-rm -rf "$DATA_DIR/venv.previous"
-if [ -d "$VENV" ]; then mv "$VENV" "$DATA_DIR/venv.previous"; fi
-mv "$STAGE" "$VENV"
-STAGE=""
-# The relocated venv is only ever invoked as `python -I -m ai_bridge_cli`.
-if ! "$VENV/bin/python" -I -m ai_bridge_cli --version >/dev/null; then
-  rm -rf "$VENV"
-  [ -d "$DATA_DIR/venv.previous" ] && mv "$DATA_DIR/venv.previous" "$VENV"
-  die "Relocated virtualenv failed; previous one restored."
-fi
-
-say "Installing launchers into ~/.local/bin"
-launchers install --venv-python "$VENV/bin/python" ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
+# One locked transaction: preflight again, swap venv (previous kept), verify,
+# publish launchers (journaled). Any failure restores the previous state.
+say "Activating (venv swap + launchers, all-or-nothing)"
+launchers activate --stage "$STAGE" ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}
 
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;

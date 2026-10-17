@@ -134,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
     de.add_argument("--dry-run", action="store_true", help="preview only (the default without --yes)")
     de.add_argument("--yes", action="store_true", help="perform the move; requires --plan-id from a preview")
     de.add_argument("--plan-id", help="plan ID printed by the preview; refuses if anything changed")
+    de.add_argument("--allow-uninspectable", action="store_true",
+                    help="HIGH RISK: proceed although some of your processes cannot be inspected for open "
+                         "session files (part of the plan ID; preview and --yes must both use it)")
 
     tr = sa.add_parser("trash", help="list, restore or purge deleted sessions")
     ta = tr.add_subparsers(dest="trash_action", metavar="TRASH_ACTION", required=True)
@@ -364,11 +367,12 @@ def _delete(args):
     from . import trash
     catalog = _catalog()
     sessions = _resolve_many(catalog, args)
-    plan = trash.build_plan(sessions, catalog.activity)
+    plan = trash.build_plan(sessions, catalog.activity, allow_uninspectable=args.allow_uninspectable)
     preview = plan.to_json()
     if args.dry_run or not args.yes:
         if args.dry_run or not interactive_terminal() or not plan.allowed:
-            preview["next"] = (f"{prog_name()} sessions delete {' '.join(args.session)} --yes --plan-id "
+            extra = " --allow-uninspectable" if args.allow_uninspectable else ""
+            preview["next"] = (f"{prog_name()} sessions delete {' '.join(args.session)}{extra} --yes --plan-id "
                                f"{plan.plan_id}") if plan.allowed else "Nothing can be deleted."
             return "plan", preview
         from .output import render

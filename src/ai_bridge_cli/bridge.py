@@ -67,6 +67,8 @@ class BridgeState:
         self.tasks_dir = Path(tasks_dir or paths.bridge_tasks_dir())
         self.jobs_dir = self.state_dir / "jobs"
         self._cache: dict[str, tuple[tuple, dict]] = {}
+        self.problems: list[str] = []
+        self._last: list[dict] = []
 
     @property
     def available(self) -> bool:
@@ -142,23 +144,40 @@ class BridgeState:
         return sid if is_uuid(sid) else None
 
     def jobs(self, kind: str | None = "agent") -> list[dict]:
-        if not self.available:
+        """Readable job records. Anything that could not be read is recorded in
+        self.problems (never silently skipped): callers that destroy data must
+        treat a non-empty list as "state unknown"."""
+        self.problems = []
+        try:
+            info = os.lstat(self.jobs_dir)
+        except FileNotFoundError:
+            return []
+        except OSError as error:
+            self.problems.append(f"jobs directory unreadable: {error.strerror}")
+            return []
+        if not stat.S_ISDIR(info.st_mode):
+            self.problems.append("jobs path is not a real directory")
             return []
         out = []
         try:
             names = os.listdir(self.jobs_dir)
-        except OSError:
+        except OSError as error:
+            self.problems.append(f"jobs directory unreadable: {error.strerror}")
             return []
         for name in names:
             stem = name[:-5] if name.endswith(".json") else None
             if not stem or not JOB_ID.fullmatch(stem):
-                continue  # skips *.output.json etc. (they contain dots)
+                continue  # skips *.output.json etc. (they contain dots) and temp files
             path = self.jobs_dir / name
             try:
                 info = path.lstat()
-            except OSError:
+            except FileNotFoundError:
+                continue  # removed by retention between listdir and lstat
+            except OSError as error:
+                self.problems.append(f"{stem}: {error.strerror}")
                 continue
             if not stat.S_ISREG(info.st_mode):
+                self.problems.append(f"{stem}: not a regular file")
                 continue
             key = (info.st_ino, info.st_size, info.st_mtime_ns)
             hit = self._cache.get(stem)
@@ -167,9 +186,13 @@ class BridgeState:
             else:
                 try:
                     raw = self._read(path, MAX_JOB_BYTES)
-                except (OSError, ValueError, UnsafePath):
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError, UnsafePath) as error:
+                    self.problems.append(f"{stem}: {error}"[:200])
                     continue
                 if not isinstance(raw, dict) or raw.get("id") != stem:
+                    self.problems.append(f"{stem}: unrecognized job record")
                     continue
                 meta = self._derive(raw)
                 if meta.get("kind") == "agent":
@@ -179,7 +202,13 @@ class BridgeState:
                 continue
             out.append(meta)
         out.sort(key=lambda m: m.get("started") or 0, reverse=True)
+        self._last = out
         return out
+
+    def unattributed(self) -> list[dict]:
+        """Unfinished agent jobs whose session cannot be determined (from the last jobs() call)."""
+        return [m for m in self._last if m.get("kind") == "agent" and uncertain(m)
+                and not m.get("observed_session_id")]
 
     def job(self, job_id: str) -> dict:
         if not JOB_ID.fullmatch(job_id or ""):

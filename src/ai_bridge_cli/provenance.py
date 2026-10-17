@@ -53,12 +53,15 @@ class ProvenanceReader:
     "missing" (bridge state exists but no provenance directory), "unsafe".
     """
 
-    def __init__(self, state_dir: Path | None = None):
+    def __init__(self, state_dir: Path | None = None, install_root: Path | None = None):
         self.state_dir = Path(state_dir or paths.bridge_state_dir()).absolute()
+        self.install_root = Path(install_root or paths.bridge_install_root()).absolute()
         self.fd: int | None = None
         self.state = "missing"
         self.note: str | None = None
         self.names: set[str] = set()
+        # Earliest verified first_seen: provenance recording was demonstrably active from then on.
+        self.epoch: float | None = None
 
     def __enter__(self):
         self.open()
@@ -67,10 +70,26 @@ class ProvenanceReader:
     def __exit__(self, *exc):
         self.close()
 
+    @staticmethod
+    def _absent(path: Path) -> bool:
+        """lstat-based: a dangling symlink is present (and suspicious), not absent."""
+        try:
+            os.lstat(path)
+            return False
+        except FileNotFoundError:
+            return True
+
     def open(self):
-        if not self.state_dir.exists():
-            self.state = "absent_bridge"
-            self.note = "No bridge state directory for this account."
+        if self._absent(self.state_dir):
+            if self._absent(self.install_root):
+                self.state = "absent_bridge"
+                self.note = "No ai-bridge state or installation on this account."
+            else:
+                self.state = "missing"
+                self.note = "ai-bridge is installed but has no state directory; origin cannot be verified."
+            return
+        if os.path.islink(self.state_dir):
+            self.state, self.note = "unsafe", "Bridge state directory is a symlink."
             return
         parts = (*self.state_dir.parts[1:], "management", "provenance")
         if ".." in parts:
@@ -100,6 +119,7 @@ class ProvenanceReader:
             self.names = {n for n in os.listdir(fd) if n.endswith(".json") and len(n) == 69}
             self.fd, fd = fd, None
             self.state = "ok"
+            self._compute_epoch()
         except (UnsafePath, OSError) as error:
             self.state, self.note = "unsafe", f"Provenance directory rejected: {error}"
         finally:
@@ -111,8 +131,27 @@ class ProvenanceReader:
             os.close(self.fd)
             self.fd = None
 
-    def lookup(self, agent: str, session_id: str) -> tuple[str, dict | None, str | None]:
-        """(origin, record, note) with origin in mcp|direct|unknown."""
+    def _compute_epoch(self, limit: int = 10000) -> None:
+        for name in sorted(self.names)[:limit]:
+            try:
+                row = json.loads(read_bytes_nofollow(Path(name), MAX_BYTES, private=True, dir_fd=self.fd))
+                if isinstance(row, dict) and filename(row.get("agent"), row.get("session_id")) == name:
+                    row = validate(row, row["agent"], row["session_id"])
+                    self.epoch = row["first_seen"] if self.epoch is None else min(self.epoch, row["first_seen"])
+            except (UnsafePath, OSError, ValueError, TypeError):
+                continue
+
+    def lookup(self, agent: str, session_id: str, created: float | None = None,
+               bridge_referenced: bool = False, jobs_complete: bool = True) -> tuple[str, dict | None, str | None]:
+        """(origin, record, note) with origin in mcp|direct|unknown.
+
+        Direct must be *proven*; a missing record alone is not proof (sessions
+        used through MCP before the server recorded provenance have none):
+        * no ai-bridge state or installation exists on this account, or
+        * no record, the session was created after the provenance epoch (the
+          earliest verified first_seen, i.e. recording was active), no bridge
+          job references it, and every bridge job record could be read.
+        """
         if not is_uuid(session_id) or agent not in paths.AGENTS:
             return "unknown", None, "Session ID is not an exact UUID."
         if self.state == "absent_bridge":
@@ -120,18 +159,25 @@ class ProvenanceReader:
         if self.state != "ok" or self.fd is None:
             return "unknown", None, self.note
         name = filename(agent, session_id)
-        if name not in self.names:
-            return "direct", None, "No MCP provenance record."
-        try:
-            row = validate(json.loads(read_bytes_nofollow(Path(name), MAX_BYTES, private=True,
-                                                          dir_fd=self.fd)), agent, session_id)
-        except FileNotFoundError:
-            return "direct", None, "No MCP provenance record."
-        except (UnsafePath, OSError, ValueError) as error:
-            return "unknown", None, f"Provenance record rejected: {error}"
-        return "mcp", row, "Verified MCP provenance record."
+        if name in self.names:
+            try:
+                row = validate(json.loads(read_bytes_nofollow(Path(name), MAX_BYTES, private=True,
+                                                              dir_fd=self.fd)), agent, session_id)
+            except (UnsafePath, OSError, ValueError) as error:  # incl. vanished/dangling: not "missing"
+                return "unknown", None, f"Provenance record rejected: {error}"
+            return "mcp", row, "Verified MCP provenance record."
+        if bridge_referenced:
+            return "unknown", None, "No provenance record, but bridge jobs reference this session."
+        if not jobs_complete:
+            return "unknown", None, "No provenance record; some bridge job records are unreadable."
+        if self.epoch is None:
+            return "unknown", None, "No provenance record, and recording has never been verified on this account."
+        if created is None or created <= self.epoch:
+            return "unknown", None, ("No provenance record, but the session predates verified provenance "
+                                     "recording; it may have been used through MCP.")
+        return "direct", None, "No MCP provenance record; created after provenance recording began."
 
 
-def lookup(agent: str, session_id: str, state_dir: Path | None = None):
+def lookup(agent: str, session_id: str, state_dir: Path | None = None, **kwargs):
     with ProvenanceReader(state_dir) as reader:
-        return reader.lookup(agent, session_id)
+        return reader.lookup(agent, session_id, **kwargs)

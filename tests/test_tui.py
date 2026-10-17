@@ -230,3 +230,28 @@ def test_codex_trash_uses_native_archive(populated):
         await settle(pilot, app)
         assert ["archive", CODEX_ID] in populated.calls()
     drive(scenario)
+
+
+def test_background_updates_while_a_modal_is_open(populated):
+    """Refresh/preview callbacks must target the main screen, not the active modal."""
+    async def scenario(app, pilot):
+        await pilot.press("question_mark")
+        await pilot.pause()
+        app._preview_cache.clear()
+        app.refresh_catalog()
+        app._schedule_preview()
+        await pilot.pause(0.3)
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.HelpScreen)
+        assert app._q("#table").row_count == 4
+        await pilot.press("escape")
+        await pilot.press("down")
+        await settle(pilot, app)
+    drive(scenario)
+
+
+def test_quit_with_pending_preview_is_clean(populated):
+    async def scenario(app, pilot):
+        await pilot.press("down", "down")  # schedules debounced preview loads
+        await app.action_quit()
+    drive(scenario)

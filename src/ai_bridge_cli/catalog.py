@@ -81,17 +81,24 @@ class Catalog:
             own, self.overlays.error = {}, str(error)
         if self.overlays.error:
             self.warnings.append(self.overlays.error)
+        jobs_complete = True
         try:
             jobs = self.bridge.session_jobs()
+            if self.bridge.problems:
+                jobs_complete = False
+                self.warnings.append(f"{len(self.bridge.problems)} bridge job record(s) unreadable; "
+                                     "status and origin are shown as uncertain where it matters.")
         except Exception as error:
-            jobs = {}
+            jobs, jobs_complete = {}, False
             self.warnings.append(f"Bridge job records unreadable: {error}")
         self.activity = activity_mod.snapshot() if probe_activity else activity_mod.Activity()
         now = time.time()
         with ProvenanceReader() as reader:
             self.provenance_state, self.provenance_note = reader.state, reader.note
             for s in sessions:
-                s.origin, s.provenance, s.origin_note = reader.lookup(s.agent, s.session_id)
+                s.origin, s.provenance, s.origin_note = reader.lookup(
+                    s.agent, s.session_id, created=s.created,
+                    bridge_referenced=(s.agent, s.session_id.lower()) in jobs, jobs_complete=jobs_complete)
                 if is_uuid(s.session_id):
                     state = self.overlays.resolve(s.agent, s.session_id, own)
                     s.alias = state.get("alias") or None
