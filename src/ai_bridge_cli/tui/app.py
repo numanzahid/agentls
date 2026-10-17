@@ -825,7 +825,8 @@ class SessionBrowser(App):
             elif choice == "trash":
                 self._confirm_delete(plan)
 
-        self.push_screen(RemoveScreen(f"Remove {what}?"), chosen)
+        note = '\n'.join(dict.fromkeys(warning for item in plan.items for warning in item.warnings))
+        self.push_screen(RemoveScreen(f"Remove {what}?", note=note), chosen)
 
     def _confirm_delete(self, plan: trash.DeletePlan) -> None:
         if len(plan.allowed) == len(plan.items):

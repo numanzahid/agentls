@@ -88,6 +88,7 @@ class Item:
     entries: list[Entry] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    activity_proof: tuple = ()
 
     @property
     def allowed(self) -> bool:
@@ -203,6 +204,10 @@ def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_d
     if session.error:
         item.blockers.append(session.error)
     evidence = act.evidence(session.agent, session.session_id, session.storage_path)
+    item.activity_proof = act.managed_idle.get((session.session_id, session.storage_path), ())
+    if item.activity_proof:
+        item.warnings.append('Verified managed shared Codex handle: idle chat. '
+                             'Native archive rechecks activity; daemon will stay running.')
     if evidence:
         item.blockers.append(f"In use: {evidence}")
     elif session.status in ("active", "uncertain", "recent"):
@@ -250,7 +255,7 @@ def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_d
 
 def _plan_id(items: list[Item], allow_uninspectable: bool) -> str:
     canon = [allow_uninspectable] + [
-        (i.agent, i.session_id, i.method, sorted(i.blockers),
+        (i.agent, i.session_id, i.method, sorted(i.blockers), i.activity_proof,
          [(e.path, sorted(e.identity.items()), e.tree) for e in i.entries]) for i in items]
     return hashlib.sha256(json.dumps(canon, default=str).encode()).hexdigest()[:16]
 
@@ -438,6 +443,8 @@ def _session_still_free(item: Item, session: Session, allow_uninspectable: bool)
     evidence = act.evidence(session.agent, session.session_id, session.storage_path)
     if evidence:
         raise UnsafePath(f"Session became active ({evidence}).")
+    if act.managed_idle.get((session.session_id, session.storage_path), ()) != item.activity_proof:
+        raise UnsafePath('Session holder identities changed since the preview.')
     if act.incompleteness() and not allow_uninspectable:
         raise UnsafePath(f"Running processes cannot be fully inspected ({act.incompleteness()}).")
 
@@ -475,6 +482,10 @@ def execute(plan: DeletePlan, expected_plan_id: str | None = None) -> dict:
                 if item.method == "codex-archive":
                     record["codex_state"] = "archiving"
                     _write_manifest(batch, manifest)
+                    for entry in record['entries']:
+                        with pinned_parent(Path(entry['root']), Path(entry['path'])) as (fd, name):
+                            _revalidate(entry, fd, name)
+                    _session_still_free(item, sessions[(item.agent, item.session_id)], plan.allow_uninspectable)
                     _codex("archive", item.session_id)
                     record["codex_state"] = "archived"
                 else:

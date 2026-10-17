@@ -61,6 +61,7 @@ class Activity:
     uninspectable: list = field(default_factory=list)  # (pid, comm) same-user, fd table unreadable
     tolerated: list = field(default_factory=list)      # (pid, comm) allow-listed session managers
     taken: float = 0.0
+    managed_idle: dict = field(default_factory=dict)  # (session, path) -> proof hashes
 
     @property
     def complete(self) -> bool:
@@ -77,21 +78,51 @@ class Activity:
         return "; ".join(parts)
 
     def evidence(self, agent: str, session_id: str, storage_path: str) -> str | None:
+        self.managed_idle.pop((session_id, storage_path), None)
         sid = session_id.lower()
         if agent == "claude" and sid in self.claude_live:
             return f"Claude Code process {self.claude_live[sid]} has this session open."
         if sid in self.cmdline_ids:
             return f"Process {self.cmdline_ids[sid]} was started with this session ID."
-        for candidate in _storage_files(agent, session_id, storage_path):
+        candidates = _storage_files(agent, session_id, storage_path)
+        managed_proofs = ()
+        # Locks always win, including writer locks held by a managed daemon.
+        for candidate in candidates:
+            try:
+                info = candidate.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return 'Session locks could not be inspected.'
+            if (info.st_dev, info.st_ino) in self.locked:
+                return f'{candidate.name} is locked by another process.'
+        for candidate in candidates:
             try:
                 info = os.stat(candidate, follow_symlinks=False)
             except OSError:
                 continue
             key = (info.st_dev, info.st_ino)
             if key in self.open_files:
+                holders = self.file_holders.get(key, {self.open_files[key]})
+                if (agent == 'codex' and candidate == Path(storage_path) and self.complete
+                        and key in self.file_holders):
+                    from . import codex_idle
+                    try:
+                        proofs = tuple(sorted((pid, codex_idle.verify(pid, session_id, storage_path))
+                                              for pid in holders))
+                        if not proofs or self.open_files[key] not in holders:
+                            raise UnsafePath('Incomplete holder identities.')
+                    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError,
+                            StopIteration, OverflowError) as error:
+                        return (f'Process {self.open_files[key]} has {candidate.name} open; '
+                                f'managed shared Codex inactivity could not be verified ({error}).')
+                    managed_proofs = proofs
+                    continue
                 return f"Process {self.open_files[key]} has {candidate.name} open."
             if key in self.locked:
                 return f"{candidate.name} is locked by another process."
+        if managed_proofs:
+            self.managed_idle[(session_id, storage_path)] = managed_proofs
         return None
 
 

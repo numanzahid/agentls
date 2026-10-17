@@ -214,6 +214,20 @@ stop deletion and are reported. Recent writes still require waiting until idle. 
 preview/plan-ID flow is unchanged; there is no process-termination bypass flag.
 Blocked items cannot be confirmed.
 
+An old rollout handle held by a **verified managed shared Codex app-server** can be
+treated as idle without stopping the daemon or using `--allow-uninspectable`.
+This narrow Linux exception currently supports packaged Codex **0.163.0** only,
+whose native archive writer-lock behavior has been tested. It requires matching
+daemon PID/boot/start identity, trusted native executable and managed Unix launch
+arguments, unchanged process threads, complete inspection of every holder, no
+session-ID or lock activity, and a read-only native `thread/read` response confirming
+the exact session/path is `idle` or `notLoaded`. Both native and rollout update times
+must be at least 120 seconds old. Unknown versions, launch modes, unavailable native
+state, active/errored threads, and mixed or unknown holders remain blocked.
+The confirmation explains the shared handle. Execution repeats these checks and
+file identity checks immediately before native archive; Codex's own writer lock
+guards a concurrent writer after the final check. No shared daemon is signalled.
+
 * **Preview / plan.** Every file records its device, inode, type, size, mtime and ctime. Every
   directory also records a bounded, non-following, recursive fingerprint of *every object inside*.
   This catches in-place writes to `store.db` or its WAL and changes to nested Claude files even
@@ -392,6 +406,9 @@ characters are escaped and nothing is interpreted as markup.
 python3 -m venv .venv
 .venv/bin/pip install -e '.[test]'
 .venv/bin/pytest            # synthetic fixtures only; never reads your real stores
+# Optional native behavior checks: isolated temporary CODEX_HOME/HOME, no model calls.
+AI_BRIDGE_TEST_CODEX="$(command -v codex)" .venv/bin/pytest tests/test_codex_idle.py
+.venv/bin/ruff check --isolated --select E4,E7,E9,F src tests
 ```
 
 The scanners, the Cursor store reader and parts of the terminal output were adapted from the

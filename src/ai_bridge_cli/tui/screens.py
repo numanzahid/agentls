@@ -53,14 +53,17 @@ class RemoveScreen(Dialog):
                 Binding("d", "choose('trash')", "Delete", priority=True),
                 Binding("c", "cancel", "Cancel", priority=True)]
 
-    def __init__(self, title: str):
+    def __init__(self, title: str, note: str = ''):
         super().__init__()
         self.title_text = title
+        self.note = note
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="box removal"):
             yield Label(Text(self.title_text), classes="box-title")
             yield Static(Text("Archive hides chats; Delete removes them from the native list. Both are restorable."))
+            if self.note:
+                yield Static(Text(safe(self.note), style='yellow'))
             with Horizontal(classes="buttons"):
                 yield Button(Text("a Archive"), id="archive")
                 yield Button(Text("d Delete"), id="trash")
@@ -180,6 +183,8 @@ def plan_table(plan: dict) -> Table:
             grid.add_row("", Text(f"{entry['kind']}: {safe(entry['path'])}", style="dim"))
         for blocker in item["blockers"]:
             grid.add_row("", Text(f"blocked: {safe(blocker)}", style="red"))
+        for warning in item.get('warnings', []):
+            grid.add_row('', Text(safe(warning), style='yellow'))
         grid.add_row("", "")
     if any("Running processes cannot be fully inspected" in blocker
            for item in plan["items"] for blocker in item["blockers"]):
