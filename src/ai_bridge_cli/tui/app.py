@@ -8,8 +8,11 @@ after a refresh completes, so a background scan never shows partial state.
 from __future__ import annotations
 
 import os
+import shlex
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from rich.table import Table
@@ -21,13 +24,13 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Input, Select, Static
 
-from .. import native, paths, trash
+from .. import native, paths, settings, trash
 from ..catalog import Catalog, Query
 from ..model import SORT_KEYS, Session
 from ..output import relative
 from ..scanners import history
 from ..textsafe import one_line, safe
-from .screens import ChoiceScreen, ConfirmScreen, HelpScreen, InputScreen, TrashScreen, plan_table
+from .screens import ChoiceScreen, ConfirmScreen, HelpScreen, InputScreen, SettingsScreen, TrashScreen, plan_table
 
 AGENT_STYLE = {"claude": "#d97757", "codex": "#10a37f", "cursor": "#5b8def"}
 AGENT_SHORT = {"claude": "cl", "codex": "cx", "cursor": "cu"}
@@ -37,6 +40,12 @@ ORIGIN_LABEL = {"mcp": ("MCP", "bold magenta"), "direct": ("Direct", ""), "unkno
 AUTO_REFRESH_SECONDS = 20
 PREVIEW_MESSAGES = 40
 WIDE, MEDIUM = 130, 90
+
+
+@dataclass(frozen=True)
+class NativeHandoff:
+    session: Session
+    plan: native.LaunchPlan
 
 
 def home_short(path: str | None) -> str:
@@ -63,6 +72,7 @@ class SessionBrowser(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "help", "Help"),
+        Binding("ctrl+s,f2", "settings", "Settings", priority=True),
         Binding("slash", "focus_search", "Search"),
         Binding("o", "open", "Open"),
         Binding("space", "toggle_mark", "Mark", show=False),
@@ -99,6 +109,12 @@ class SessionBrowser(App):
         self._preview_timer = None
         self._preview_key: str | None = None
         self._refresh_lock = threading.Lock()
+        self.settings = settings.Settings()
+        self.settings_error: str | None = None
+        try:
+            self.settings = settings.load()
+        except (OSError, ValueError) as error:
+            self.settings_error = f"CLI settings could not be loaded; using close/exec default: {error}"
 
     def _q(self, selector: str, expect=None):
         """Main-screen widgets, even while a modal is on top (App.query_one uses the active screen)."""
@@ -138,6 +154,8 @@ class SessionBrowser(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        if self.settings_error:
+            self.notify(self.settings_error, severity="warning", markup=False, timeout=15)
         self._q("#table", DataTable).focus()
         self._apply_tier(force=True)
         self.refresh_catalog(initial=True)
@@ -599,6 +617,27 @@ class SessionBrowser(App):
         self._refresh_rows(changed)
 
     # -- actions: sessions ----------------------------------------------------
+    def action_settings(self) -> None:
+        if len(self.screen_stack) != 1:
+            return
+
+        def chosen(mode):
+            if mode is None:
+                return
+            preference = settings.Settings(launch_mode=mode)
+            try:
+                settings.save(preference)
+            except (OSError, ValueError) as error:
+                self.notify(f"Settings not saved: {error}", severity="error", markup=False, timeout=12)
+                return
+            self.settings = preference
+            self.settings_error = None
+            self.notify("Saved: close browser and exec native CLI." if mode == "exec" else
+                        "Saved: suspend browser and return when native CLI exits.", markup=False)
+
+        self.push_screen(SettingsScreen(self.settings.launch_mode, str(paths.cli_config_dir() / "settings.json")),
+                         chosen)
+
     def _require_idle(self) -> bool:
         if self.scanning and not self.by_key:
             self.notify("Still scanning…", severity="warning", markup=False)
@@ -626,29 +665,46 @@ class SessionBrowser(App):
         self.call_from_thread(self._confirm_launch, session, plan)
 
     def _confirm_launch(self, session: Session, plan: native.LaunchPlan) -> None:
+        if not self._alive() or len(self.screen_stack) != 1:
+            return
+        mode = self.settings.launch_mode  # confirmation describes exactly the mode to be used
         body = Text()
         body.append(one_line(session.display_title, 200) + "\n\n", style="bold")
         body.append("Command  ", style="bold")
-        body.append(" ".join(safe(a) for a in plan.argv) + "\n")
+        body.append(safe(shlex.join(plan.argv)) + "\n")
         body.append("Directory  ", style="bold")
         body.append(safe(plan.cwd) + "\n\n")
         for warning in plan.warnings:
             body.append(f"⚠ {warning}\n", style="yellow")
-        body.append("The browser is suspended while the native CLI runs and returns when it exits.",
+        body.append("The browser closes completely and is replaced by the native CLI. "
+                    "It will not return when the agent exits." if mode == "exec" else
+                    "The browser is suspended while the native CLI runs and returns when it exits.",
                     style="dim")
+        body.append("\nChange this preference in Settings (Ctrl+S / F2).", style="dim")
         verb = "Fork" if plan.action == "fork" else "Open"
         self.push_screen(ConfirmScreen(f"{verb} in {session.agent}?", body, verb),
-                         lambda ok: self._launch(session, plan) if ok else None)
+                         lambda ok: self._launch(session, plan, mode) if ok else None)
 
-    def _launch(self, session: Session, plan: native.LaunchPlan) -> None:
+    def _launch(self, session: Session, plan: native.LaunchPlan, mode: str) -> None:
+        if not native.interactive_terminal():
+            self.notify("Opening a native CLI needs an interactive terminal. "
+                        f"Preview with: ai-bridge sessions open {session.selector} --dry-run",
+                        severity="error", markup=False, timeout=15)
+            return
         try:
             native.recheck(plan, session)
-        except native.PreflightError as error:
+        except (native.PreflightError, OSError) as error:
             self.notify(str(error), severity="error", markup=False, timeout=10)
+            return
+        if mode == "exec":
+            # App.run() restores terminal modes before returning this request.
+            # The caller rechecks once more, then replaces Python, without a child.
+            self.exit(NativeHandoff(session, plan))
             return
         try:
             with self.suspend():
-                print(f"\n[ai-bridge] {' '.join(plan.argv)}\n[ai-bridge] in {plan.cwd} — exit the agent to return.\n",
+                print(f"\n[ai-bridge] {safe(shlex.join(plan.argv))}\n"
+                      f"[ai-bridge] in {one_line(plan.cwd)} — exit the agent to return.\n",
                       flush=True)
                 code = native.run(plan)
         except SuspendNotSupported:
@@ -818,9 +874,17 @@ class SessionBrowser(App):
 
 
 def run() -> int:
-    if os.environ.get("TERM") == "dumb":
-        print("ai-bridge: the session browser needs a capable terminal (TERM is 'dumb'); "
-              "use `ai-bridge sessions list`.")
+    if not native.interactive_terminal() or os.environ.get("TERM") == "dumb":
+        print("ai-bridge: the session browser needs an interactive, capable terminal; "
+              "use `ai-bridge sessions list`.", file=sys.stderr)
         return 2
-    SessionBrowser().run()
+    result = SessionBrowser().run()
+    if isinstance(result, NativeHandoff):
+        try:
+            native.recheck(result.plan, result.session)
+            native.exec_(result.plan)
+        except (native.PreflightError, OSError) as error:
+            print(f"ai-bridge: native launch failed: {safe(error)}. "
+                  "Run ai-bridge to reopen the browser.", file=sys.stderr)
+            return 1
     return 0

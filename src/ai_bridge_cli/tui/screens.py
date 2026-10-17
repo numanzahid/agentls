@@ -94,6 +94,22 @@ class ChoiceScreen(Dialog):
         self.dismiss(event.option.id)
 
 
+class SettingsScreen(ChoiceScreen):
+    def __init__(self, mode: str, config_path: str):
+        super().__init__("Settings · native Open / Fork behavior", [
+            ("exec", "A · Close browser and exec native CLI (default)",
+             "Same process, in the chat's project directory. Browser does not return."),
+            ("suspend", "B · Suspend browser and return afterwards",
+             "Native CLI runs as a child; browser returns when it exits."),
+        ], note=f"Current: {'A · exec' if mode == 'exec' else 'B · suspend'}\n"
+                f"Enter saves for this user · Esc cancels\n{safe(config_path)}")
+        self.mode = mode
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.query_one(OptionList).highlighted = 0 if self.mode == "exec" else 1
+
+
 def plan_table(plan: dict) -> Table:
     grid = Table.grid(padding=(0, 1))
     grid.add_column(no_wrap=True)
@@ -108,6 +124,13 @@ def plan_table(plan: dict) -> Table:
         for blocker in item["blockers"]:
             grid.add_row("", Text(f"blocked: {safe(blocker)}", style="red"))
         grid.add_row("", "")
+    if any("Running processes cannot be fully inspected" in blocker
+           for item in plan["items"] for blocker in item["blockers"]):
+        grid.add_row("", Text("Safety check incomplete: this does not prove the selected chat is active. "
+                              "Exit the listed live agents normally, wait at least 120 seconds after "
+                              "the last write, then refresh and preview again. Archive (a) hides chats "
+                              "without touching native files. The browser never bypasses this check.",
+                              style="yellow"))
     return grid
 
 
@@ -125,6 +148,7 @@ class HelpScreen(Dialog):
                      ("n", "rename (display alias only)"), ("a", "archive / unarchive (hide; files untouched)"),
                      ("d / Del", "archive or move to trash (native delete, with preview)"),
                      ("t", "trash: restore or purge"), ("y", "copy agent:ID"), ("A", "show/hide archived"),
+                     ("Ctrl+S / F2", "settings: close/exec native (default) or suspend and return"),
                      ("q", "quit")]),
     ]
 

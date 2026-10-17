@@ -10,8 +10,8 @@ on the same account.
 * Search, filter by agent / origin / project / status, sort by updated / title / agent / project.
 * Last Model column shows the most recently recorded known model for each chat.
 * Multi-select, details and conversation preview, rename (display alias), archive / unarchive.
-* Open (resume) or fork a session in its native CLI after a preflight; the browser suspends while
-  the agent runs and comes back when it exits.
+* Open (resume) or fork a session in its native CLI after a preflight; by default the browser
+  exits and exec-replaces itself with the agent. Settings can select suspend and return instead.
 * Explicit native delete into a restorable trash, with a preview first.
 * Headless `--json` / table commands for scripts.
 
@@ -111,6 +111,7 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | `y` | copy `agent:ID` to the clipboard (OSC 52) |
 | `r` / `F5` | refresh (also automatic every 20 s) |
 | `?` | help |
+| `Ctrl+S` / `F2` | settings: close/exec native (default) or suspend and return |
 | `q` | quit |
 
 The layout adapts to the terminal width. Wide terminals show the details pane beside the list.
@@ -215,7 +216,8 @@ Delete refuses when any of these hold:
   line unreadable, an unreadable Claude session-registry entry, and a same-user process whose
   open files cannot be listed (non-dumpable processes, for example running `codex`). A
   reported allow-list of session managers (`(sd-pam)`, `sshd`, `sshd-session`, `systemd`) is
-  tolerated. `sessions delete --allow-uninspectable` overrides this as an explicit, high-risk
+  tolerated. Confirmed zombie/dead processes are ignored because they hold no open files.
+  `sessions delete --allow-uninspectable` overrides this as an explicit, high-risk
   choice that is recorded in the plan ID; the TUI never overrides it;
 * any bridge job record is unreadable, or an unfinished bridge job of the same agent has no known
   session yet;
@@ -228,6 +230,23 @@ Delete refuses when any of these hold:
 
 `trash purge BATCH --yes` permanently removes one fully resolved batch. It is the only real
 deletion, and only of data this tool moved. Purging leaves Codex items archived by Codex.
+
+If a preview says **Running processes cannot be fully inspected**, the checker cannot rule out
+open chat files; it has not proved that the selected chat is active. Linux can deny access to
+`/proc/PID/fd` for non-dumpable agents, ptrace/security restrictions or restricted proc mounts.
+Check the listed processes with `ps -p PID1,PID2 -o pid,ppid,user,stat,comm`.
+`Z` means an exited zombie awaiting its parent's reap; this version ignores confirmed zombies.
+Do not kill a parent agent just to clear zombies. For live agents, exit normally, wait at least
+120 seconds after the last write, refresh, then request a new preview:
+
+```bash
+ai-bridge sessions delete agent:EXACT-UUID --dry-run
+```
+
+Preview does not delete chats. If live inspection remains blocked, archive with `a` to hide the
+chat without modifying native files, or leave it alone. The TUI never adds
+`--allow-uninspectable`. Any explicit CLI override still requires its own matching preview/plan
+ID and does not bypass known activity, recent writes, storage checks or unfinished jobs.
 
 All native-store reads are bounded and opened `O_NOFOLLOW|O_NONBLOCK`, and must be regular
 files. A FIFO, device or symlink named like a session cannot hang or redirect a scan. One
@@ -247,6 +266,26 @@ It re-checks the file's identity immediately before launch. The native CLI runs 
 project directory with your environment, minus `AI_BRIDGE_*` variables. Cursor resume is refused
 while `AI_BRIDGE_CURSOR_HOME` points away from `~/.cursor`, because Cursor CLI itself would open
 a different store.
+
+The browser confirms the command, project directory and launch behavior before doing anything.
+By default **Open and Fork close the browser completely**. Textual restores the terminal,
+activity/storage/directory/executable are rechecked, then `exec` replaces Python with the native
+CLI in the saved project directory. There is no Python parent waiting for the agent; tmux can
+observe the native process. Exiting the agent does not return to the browser. If the final
+recheck or exec fails after teardown, a plain terminal error explains how to reopen the browser.
+Earlier refusals and cancelled confirmations keep the browser open.
+
+Press **Ctrl+S or F2** to choose **A: close/exec (default)** or **B: suspend and return**.
+Use arrow keys then Enter to save, or Esc to cancel. B keeps the browser alive while the native
+child runs, restores it afterwards and refreshes the listing. Both modes require an interactive
+terminal; use `sessions open agent:UUID --dry-run` for a headless launch preview.
+
+The preference is per user at `$XDG_CONFIG_HOME/ai-bridge-cli/settings.json` (default
+`~/.config/ai-bridge-cli/settings.json`), separate from the MCP configuration and native stores.
+It is written atomically with fsync inside an owner-only directory (0700), as an owner-only
+regular file (0600). Symlinks, hard links, foreign ownership, shared permissions and malformed
+settings are refused. An unreadable config shows a warning and uses the close/exec default;
+a failed save leaves the current preference in effect. Reading defaults creates no files.
 
 ## Bridge commands (optional)
 

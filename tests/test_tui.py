@@ -7,7 +7,7 @@ import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli import native
+from ai_bridge_cli import native, settings
 from ai_bridge_cli.tui import screens
 from ai_bridge_cli.tui.app import SessionBrowser
 
@@ -153,7 +153,9 @@ def test_trash_and_restore_flow(populated):
 
 
 def test_open_suspends_and_runs_native_cli(populated, monkeypatch):
+    settings.save(settings.Settings(launch_mode="suspend"))
     ran = []
+    monkeypatch.setattr(native, "interactive_terminal", lambda: True)
     monkeypatch.setattr(native, "run", lambda plan: ran.append(plan.argv) or 0)
     monkeypatch.setattr(SessionBrowser, "suspend", lambda self: contextlib.nullcontext())
 
@@ -297,3 +299,192 @@ def test_details_show_full_model_and_unknown(env, model):
         assert values[labels.index("Last Model")].plain == (model or "—")
         assert app.query_one("#table").get_cell(f"claude:{CLAUDE_ID}", "model").plain == (model or "—")
     drive(scenario)
+
+
+@pytest.mark.parametrize("shortcut", ["ctrl+s", "f2"])
+def test_settings_keyboard_saves_and_reloads(populated, shortcut):
+    async def scenario(app, pilot):
+        assert app.settings.launch_mode == "exec"
+        await pilot.press(shortcut)
+        await pilot.pause()
+        assert isinstance(app.screen, screens.SettingsScreen)
+        assert app.screen.query_one("OptionList").highlighted == 0
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.settings.launch_mode == settings.load().launch_mode == "suspend"
+        assert browser().settings.launch_mode == "suspend"
+        await pilot.press(shortcut)
+        await pilot.pause()
+        assert app.screen.query_one("OptionList").highlighted == 1
+        await pilot.press("up", "escape")
+        await pilot.pause()
+        assert app.settings.launch_mode == "suspend"  # Escape does not save
+        await pilot.press(shortcut)
+        await pilot.pause()
+        await pilot.press("up", "enter")
+        await pilot.pause()
+        assert browser().settings.launch_mode == "exec"
+    drive(scenario)
+
+
+def test_settings_shortcut_in_search_does_not_type_or_leak(populated):
+    async def scenario(app, pilot):
+        await pilot.press("slash")
+        await pilot.press("f2")
+        await pilot.pause()
+        assert isinstance(app.screen, screens.SettingsScreen)
+        await pilot.press("q", "o", "d", "ctrl+s")
+        assert isinstance(app.screen, screens.SettingsScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.focused.id == "search" and app._q("#search").value == ""
+    drive(scenario, size=(60, 20))
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_default_open_exits_only_after_confirmation(populated, monkeypatch, confirm):
+    from ai_bridge_cli.tui.app import NativeHandoff
+    monkeypatch.setattr(native, "interactive_terminal", lambda: True)
+    calls = []
+    monkeypatch.setattr(native, "run", lambda plan: calls.append("child"))
+    monkeypatch.setattr(native, "exec_", lambda plan: calls.append("exec"))
+
+    async def scenario(app, pilot):
+        app._q("#table").move_cursor(row=keys(app).index(f"claude:{CLAUDE_ID}"))
+        await pilot.press("enter")
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.ConfirmScreen)
+        assert "closes completely" in app.screen.body.plain
+        assert str(populated.project) in app.screen.body.plain
+        assert not calls and app.return_value is None
+        await pilot.press("enter" if confirm else "escape")
+        await pilot.pause()
+        if confirm:
+            assert isinstance(app.return_value, NativeHandoff)
+            assert app.return_value.plan.cwd == str(populated.project)
+            assert app.return_value.session.session_id == CLAUDE_ID
+        else:
+            assert app.return_value is None
+            assert app.is_running
+        assert not calls  # exec belongs after Textual has restored the terminal
+    drive(scenario)
+
+
+@pytest.mark.parametrize("failure", ["active", "non-tty", "missing-cwd", "missing-cli", "os-error"])
+def test_open_recheck_refusal_keeps_browser(populated, monkeypatch, failure):
+    from ai_bridge_cli.activity import Activity
+    monkeypatch.setattr(native, "interactive_terminal", lambda: failure != "non-tty")
+
+    async def scenario(app, pilot):
+        app._q("#table").move_cursor(row=keys(app).index(f"claude:{CLAUDE_ID}"))
+        await pilot.press("o")
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.ConfirmScreen)
+        if failure == "active":
+            monkeypatch.setattr(native.activity_mod, "snapshot", lambda: Activity(cmdline_ids={CLAUDE_ID: 42}))
+        elif failure == "missing-cwd":
+            populated.project.rmdir()
+        elif failure == "missing-cli":
+            from pathlib import Path
+            Path(native.find_binary("claude")).unlink()  # temporary fake executable
+        elif failure == "os-error":
+            def fail(*args):
+                raise PermissionError("session storage no longer readable")
+            monkeypatch.setattr(native, "recheck", fail)
+        await pilot.press("enter")
+        await settle(pilot, app)
+        assert app.is_running and app.return_value is None
+    drive(scenario)
+
+
+def test_settings_failure_keeps_current_mode(populated, monkeypatch):
+    def fail(preference):
+        raise ValueError("unsafe config")
+    monkeypatch.setattr(settings, "save", fail)
+
+    async def scenario(app, pilot):
+        await pilot.press("f2")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.settings.launch_mode == "exec"
+    drive(scenario)
+
+
+def test_wrapper_executes_only_after_tui_returns(populated, monkeypatch):
+    from ai_bridge_cli.catalog import Catalog
+    from ai_bridge_cli.tui import app as module
+    session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
+    plan = native.plan(session)
+    order = []
+    monkeypatch.setattr(native, "interactive_terminal", lambda: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(SessionBrowser, "run", lambda self: order.append("terminal restored") or
+                        module.NativeHandoff(session, plan))
+    monkeypatch.setattr(native, "recheck", lambda p, s: order.append("recheck"))
+    monkeypatch.setattr(native, "exec_", lambda p: order.append(("exec", p.cwd)))
+    assert module.run() == 0
+    assert order == ["terminal restored", "recheck", ("exec", str(populated.project))]
+
+
+@pytest.mark.parametrize("stage", ["recheck", "exec_"])
+def test_wrapper_launch_failure_reported_cleanly(populated, monkeypatch, capsys, stage):
+    from ai_bridge_cli.catalog import Catalog
+    from ai_bridge_cli.tui import app as module
+    session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
+    plan = native.plan(session)
+    monkeypatch.setattr(native, "interactive_terminal", lambda: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(SessionBrowser, "run", lambda self: module.NativeHandoff(session, plan))
+    calls = []
+    monkeypatch.setattr(native, "exec_", lambda p: calls.append(p))
+
+    def fail(*args):
+        raise native.PreflightError("launch refused")
+    monkeypatch.setattr(native, stage, fail)
+    assert module.run() == 1
+    assert "launch refused" in capsys.readouterr().err
+    assert not calls
+
+
+def test_wrapper_non_tty_is_graceful(monkeypatch, capsys):
+    from ai_bridge_cli.tui import app as module
+    monkeypatch.setattr(native, "interactive_terminal", lambda: False)
+    assert module.run() == 2
+    assert "interactive" in capsys.readouterr().err
+
+
+def test_suspend_unsupported_keeps_browser(populated, monkeypatch):
+    from textual.app import SuspendNotSupported
+    settings.save(settings.Settings(launch_mode="suspend"))
+    monkeypatch.setattr(native, "interactive_terminal", lambda: True)
+    calls = []
+    monkeypatch.setattr(native, "run", lambda p: calls.append(p))
+
+    def unsupported(self):
+        raise SuspendNotSupported()
+    monkeypatch.setattr(SessionBrowser, "suspend", unsupported)
+
+    async def scenario(app, pilot):
+        app._q("#table").move_cursor(row=keys(app).index(f"claude:{CLAUDE_ID}"))
+        await pilot.press("o")
+        await settle(pilot, app)
+        assert "suspended" in app.screen.body.plain
+        await pilot.press("enter")
+        await settle(pilot, app)
+        assert app.is_running and app.return_value is None and not calls
+    drive(scenario)
+
+
+def test_incomplete_delete_preview_gives_safe_alternatives(populated):
+    from ai_bridge_cli import activity, trash
+    from ai_bridge_cli.catalog import Catalog
+    from rich.console import Console
+    from io import StringIO
+    session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
+    plan = trash.build_plan([session], act=activity.Activity(uninspectable=[(42, "codex")]))
+    out = StringIO()
+    Console(file=out, width=100).print(screens.plan_table(plan.to_json()))
+    text = out.getvalue()
+    assert "does not prove" in text and "Archive (a)" in text and "never bypasses" in text
+    assert not plan.allowed

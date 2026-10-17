@@ -62,6 +62,7 @@ def env(tmp_path, monkeypatch):
             cli_data=tmp_path / "cli-data", bridge_root=tmp_path / "bridge-install",
             project=tmp_path / "project", log=tmp_path / "calls.log")
     e.project.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     for path in (e.claude, e.codex, e.cursor):
         path.mkdir()
     for var, value in (("CLAUDE_CONFIG_DIR", e.claude), ("CODEX_HOME", e.codex),

@@ -62,6 +62,11 @@ def cli_state_dir() -> Path:
     return _env_path("AI_BRIDGE_CLI_STATE_DIR", home() / ".local/state/ai-bridge-cli")
 
 
+def cli_config_dir() -> Path:
+    """Standalone CLI preferences (never the MCP server's configuration)."""
+    return _env_path("XDG_CONFIG_HOME", home() / ".config") / "ai-bridge-cli"
+
+
 def cli_data_dir() -> Path:
     """Install root and quarantine (trash) for natively deleted sessions."""
     return _env_path("AI_BRIDGE_CLI_DATA_DIR", home() / ".local/share/ai-bridge-cli")

@@ -69,3 +69,50 @@ def test_native_env_strips_bridge_settings(monkeypatch):
     monkeypatch.setenv("CODEX_HOME", "/x")
     env = native.native_env()
     assert "AI_BRIDGE_TOKEN" not in env and env["CODEX_HOME"] == "/x"
+
+
+def test_exec_handoff_preserves_pid_cwd_argv_and_environment(populated):
+    """Real exec into a fake native CLI: no agent turns or native-store writes."""
+    import json
+    import subprocess
+    import sys
+
+    script = populated.root / "native-agent"
+    result = populated.root / "exec-result.json"
+    script.write_text(f"#!{sys.executable}\n" +
+                      "import json, os, sys\n" +
+                      f"with open({str(result)!r}, 'w') as stream:\n" +
+                      " json.dump({'pid': os.getpid(), 'cwd': os.getcwd(), 'argv': sys.argv[1:], "
+                      "'secret': os.environ.get('AI_BRIDGE_TOKEN')}, stream)\n")
+    script.chmod(0o700)
+    plan = native.plan(get("claude", CLAUDE_ID), "open", Activity())
+    code = ("import os; from ai_bridge_cli.native import LaunchPlan, exec_; "
+            f"plan = LaunchPlan(**{dict(plan.__dict__, argv=[str(script), '--resume', CLAUDE_ID])!r}); "
+            "exec_(plan)")
+    child = subprocess.Popen([sys.executable, "-c", code],
+                             env={**os.environ, "AI_BRIDGE_TOKEN": "not-for-agent"})
+    assert child.wait(timeout=10) == 0
+    row = json.loads(result.read_text())
+    assert row == {"pid": child.pid, "cwd": str(populated.project),
+                   "argv": ["--resume", CLAUDE_ID], "secret": None}
+
+
+def test_exec_failure_restores_cwd(populated):
+    from pathlib import Path
+    plan = native.plan(get("claude", CLAUDE_ID), "open", Activity())
+    before = Path.cwd()
+    plan.argv = [str(populated.root / "missing-agent")]
+    with pytest.raises(native.PreflightError, match="Could not start"):
+        native.exec_(plan)
+    assert Path.cwd() == before
+
+
+def test_run_uses_native_project_cwd(populated):
+    from pathlib import Path
+    plan = native.plan(get("claude", CLAUDE_ID), "open", Activity())
+    before = Path.cwd()
+    marker = populated.root / "cwd.txt"
+    plan.argv = ["/bin/sh", "-c", 'pwd > "$1"; exit 7', "agent", str(marker)]
+    assert native.run(plan) == 7
+    assert marker.read_text().strip() == str(populated.project)
+    assert Path.cwd() == before

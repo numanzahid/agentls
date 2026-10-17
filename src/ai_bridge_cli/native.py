@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -182,6 +183,10 @@ def recheck(plan_: LaunchPlan, session: Session) -> None:
         raise PreflightError(f"Session became active ({evidence}).")
     if not os.path.isdir(plan_.cwd):
         raise PreflightError("Project directory disappeared.")
+    if not os.access(plan_.cwd, os.X_OK):
+        raise PreflightError("Project directory is no longer accessible.")
+    if not os.path.isfile(plan_.argv[0]) or not os.access(plan_.argv[0], os.X_OK):
+        raise PreflightError("Native CLI is no longer executable; refresh and retry.")
 
 
 def run(plan_: LaunchPlan) -> int:
@@ -192,6 +197,18 @@ def run(plan_: LaunchPlan) -> int:
         raise PreflightError(f"Could not start {plan_.argv[0]}: {error}") from None
 
 
+def interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def exec_(plan_: LaunchPlan):
-    os.chdir(plan_.cwd)
-    os.execvpe(plan_.argv[0], plan_.argv, native_env())
+    """Replace this process; restore its directory if the executable fails."""
+    previous = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.chdir(plan_.cwd)
+        os.execvpe(plan_.argv[0], plan_.argv, native_env())
+    except OSError as error:
+        raise PreflightError(f"Could not start {plan_.argv[0]}: {error}") from None
+    finally:
+        os.fchdir(previous)
+        os.close(previous)
