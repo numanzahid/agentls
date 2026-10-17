@@ -1,0 +1,140 @@
+Screen {
+    layout: vertical;
+}
+
+#filters {
+    height: auto;
+    padding: 0 1;
+    background: $boost;
+}
+
+#search {
+    width: 1fr;
+    min-width: 20;
+    border: tall $primary 40%;
+}
+
+#search:focus {
+    border: tall $accent;
+}
+
+#filters Select {
+    width: 18;
+    margin-left: 1;
+    margin-top: 1;
+}
+
+#filters #project {
+    width: 28;
+}
+
+.medium #filters #project {
+    display: none;
+}
+
+.narrow #filters Select {
+    display: none;
+}
+
+#body {
+    height: 1fr;
+}
+
+#table {
+    width: 1fr;
+    height: 1fr;
+    scrollbar-gutter: stable;
+}
+
+#side {
+    width: 38%;
+    min-width: 40;
+    height: 1fr;
+    border-left: vkey $primary 30%;
+    padding: 0 1;
+}
+
+#side.full {
+    width: 1fr;
+    border-left: none;
+}
+
+#details {
+    margin-bottom: 1;
+    padding-bottom: 1;
+    border-bottom: solid $primary 30%;
+}
+
+#empty {
+    display: none;
+    height: auto;
+    padding: 1 2;
+    color: $text-muted;
+}
+
+#statusbar {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+
+/* -- dialogs ---------------------------------------------------------- */
+
+.dialog {
+    align: center middle;
+    background: $background 60%;
+}
+
+.box {
+    width: 76;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    border: thick $primary;
+    background: $surface;
+}
+
+.box.wide {
+    width: 110;
+}
+
+.box.danger {
+    border: thick $error;
+}
+
+.box-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.box-body {
+    height: auto;
+    max-height: 30;
+}
+
+.box Input {
+    margin: 1 0;
+}
+
+.box OptionList {
+    height: auto;
+    max-height: 12;
+    margin-bottom: 1;
+}
+
+.buttons {
+    height: auto;
+    margin-top: 1;
+    align-horizontal: right;
+}
+
+.buttons Button {
+    margin-left: 2;
+}
+
+#trash-table {
+    height: auto;
+    max-height: 24;
+    margin-bottom: 1;
+}
