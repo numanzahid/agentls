@@ -96,7 +96,9 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | Key | Action |
 | --- | --- |
 | `↑ ↓ PgUp PgDn Home End` | move |
-| `/` | search (title, alias, project, ID, model); `Esc` returns to the list |
+| `/` | search (title, alias, project, ID, model); `Enter` or `Esc` immediately focuses Session List, preserving query and filtered results |
+| `Ctrl+U` (in search) | clear the whole query; `Ctrl+Shift+A` then `Backspace` also clears |
+| `Esc` | return from filters / preview to the list; close dropdowns / dialogs; never clears search |
 | `Tab` | move between search, filters and the list |
 | `1` / `2` / `3` / `4` / `5` | focus search / filters / session list / preview & details / open settings |
 | `s` / `S` / click header | cycle sort key / reverse |

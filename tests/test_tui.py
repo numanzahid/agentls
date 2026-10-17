@@ -53,7 +53,11 @@ def test_search_and_filters(populated):
             await pilot.press(ch)
         await pilot.pause()
         assert keys(app) == [f"claude:{CLAUDE_ID}"]
-        await pilot.press("escape")  # clears search, back to the table
+        await pilot.press("escape")
+        assert app.focused.id == "table"
+        assert app.query_one("#search").value == "login"
+        assert keys(app) == [f"claude:{CLAUDE_ID}"]
+        await pilot.press("slash", "ctrl+u", "escape")
         await pilot.pause()
         assert len(app.shown) == 4 and app.focused.id == "table"
         app.query_one("#agent").value = "codex"
@@ -65,6 +69,79 @@ def test_search_and_filters(populated):
         assert app.shown == [] and app.query_one("#empty").display
         assert "No sessions match" in str(app.query_one("#empty").render())
     drive(scenario)
+
+
+@pytest.mark.parametrize('width', [40, 100, 150])
+@pytest.mark.parametrize('query', ['login', 'no-such-session', ''])
+def test_search_escape_preserves_query_and_rows_immediately(populated, width, query):
+    async def scenario(app, pilot):
+        await pilot.press('slash', *query)
+        expected = keys(app)
+        table = app._q('#table')
+        if query == 'login':
+            assert expected == [f'claude:{CLAUDE_ID}']
+        elif query:
+            assert expected == []
+        else:
+            assert len(expected) == 4
+        for _ in range(2):
+            await pilot.press('escape')
+            assert app.focused is table and table.display
+            assert app._q('#search').value == app.query_state.search == query
+            assert keys(app) == expected
+            assert [key.value for key in table.rows] == expected
+    drive(scenario, size=(width, 24))
+
+
+@pytest.mark.parametrize('clear_keys', [('ctrl+u',), ('ctrl+shift+a', 'backspace')])
+def test_explicit_search_clear_from_middle_of_query(populated, clear_keys):
+    async def scenario(app, pilot):
+        await pilot.press('slash', *'login', 'left', 'left', *clear_keys)
+        assert app.focused.id == 'search'
+        assert app._q('#search').value == app.query_state.search == ''
+        assert len(app.shown) == app._q('#table').row_count == 4
+    drive(scenario)
+
+
+def test_three_types_in_search_then_navigates_outside_input(populated):
+    async def scenario(app, pilot):
+        await pilot.press('slash', '3')
+        assert app.focused.id == 'search'
+        assert app._q('#search').value == app.query_state.search == '3'
+        expected = keys(app)
+        assert expected and len(expected) < 4
+        await pilot.press('escape', '4', '3')
+        assert app.focused.id == 'table'
+        assert app._q('#search').value == '3' and keys(app) == expected
+        assert [key.value for key in app._q('#table').rows] == expected
+    drive(scenario)
+
+
+@pytest.mark.parametrize('width', [40, 150])
+def test_escape_other_panes_keeps_search(populated, width):
+    async def scenario(app, pilot):
+        await pilot.press('slash', *'login', 'escape', 'space')
+        marked = set(app.marked)
+        assert marked
+        for pane in ('2', '4'):
+            await pilot.press(pane)
+            if pane == '2':
+                await pilot.press('enter', 'escape')
+                assert app.focused.id == 'agent' and not app._q('#agent').expanded
+            await pilot.press('escape')
+            assert app.focused.id == 'table' and app._q('#table').display
+            assert app.marked == marked
+        for modal in ('question_mark', '5'):
+            await pilot.press(modal)
+            assert len(app.screen_stack) == 2
+            await pilot.press('escape')
+            assert len(app.screen_stack) == 1 and app.focused.id == 'table'
+        await pilot.press('escape', 'escape', 'ctrl+u')
+        assert not app.marked
+        assert app._q('#search').value == app.query_state.search == 'login'
+        assert keys(app) == [f'claude:{CLAUDE_ID}']
+        assert [key.value for key in app._q('#table').rows] == keys(app)
+    drive(scenario, size=(width, 24))
 
 
 def test_sort_cycle(populated):

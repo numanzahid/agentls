@@ -65,6 +65,13 @@ def stamp(value) -> str:
         return safe(value)
 
 
+class SearchInput(Input):
+    BINDINGS = [Binding("ctrl+u", "clear_query", "Clear search", show=False)]
+
+    def action_clear_query(self) -> None:
+        self.value = ""
+
+
 class SessionBrowser(App):
     CSS_PATH = "app.tcss"
     TITLE = "ai-bridge"
@@ -139,7 +146,7 @@ class SessionBrowser(App):
         yield Header()
         yield Static("1 Search · 2 Filters · 3 Session List · 4 Preview/Details · 5 Settings", id="pane-nav")
         with Horizontal(id="filters"):
-            yield Input(placeholder="Search title, project, ID, model…  ( / )", id="search")
+            yield SearchInput(placeholder="Search title, project, ID, model…  ( / )", id="search")
             with Horizontal(id="filter-controls"):
                 yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
                               ("Cursor", "cursor")], value="all", allow_blank=False, id="agent", compact=True)
@@ -583,12 +590,10 @@ class SessionBrowser(App):
         self._q("#search", Input).focus()
 
     def action_escape(self) -> None:
-        search = self._q("#search", Input)
-        if self.focused is search:
-            if search.value:
-                search.value = ""
-            self.action_focus_pane(3)
-        elif self._q("#filters").has_class("filters-open"):
+        if (self.focused is self._q("#search", Input)
+                or self._q("#filter-controls").has_focus_within
+                or self._q("#side").has_focus_within
+                or self._q("#filters").has_class("filters-open")):
             self.action_focus_pane(3)
         elif self.details_open and self.tier != "wide":
             self.action_toggle_details()
@@ -596,8 +601,6 @@ class SessionBrowser(App):
             changed = set(self.marked)
             self.marked.clear()
             self._refresh_rows(changed)
-        elif search.value:
-            search.value = ""
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())

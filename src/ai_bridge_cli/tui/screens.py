@@ -198,7 +198,9 @@ class HelpScreen(Dialog):
     BINDINGS = [Binding("escape,q,question_mark", "cancel", "Close")]
 
     KEYS = [
-        ("Navigation", [("↑/↓ PgUp/PgDn Home/End", "move"), ("/", "search (Esc returns to the list)"),
+        ("Navigation", [("↑/↓ PgUp/PgDn Home/End", "move"), ("/", "search (Enter / Esc returns to the list; query and results kept)"),
+                        ("Ctrl+U (in search)", "clear the whole query; Ctrl+Shift+A then Backspace also clears"),
+                        ("Esc", "return from filters / preview, close dropdown / dialog; never clears search"),
                         ("1 / 2 / 3 / 4 / 5", "search / filters / session list / preview & details / settings (outside text entry)"),
                         ("Tab / Shift+Tab", "move between search, filters and list"),
                         ("s / S", "cycle sort key / reverse order (or click a column header)"),
