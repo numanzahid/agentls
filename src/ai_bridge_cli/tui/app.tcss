@@ -2,6 +2,12 @@ Screen {
     layout: vertical;
 }
 
+#pane-nav {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
 #filters {
     height: auto;
     padding: 0 1;
@@ -34,6 +40,25 @@ Screen {
 
 .narrow #filters Select {
     display: none;
+}
+
+.narrow #filters.filters-open {
+    layout: vertical;
+}
+
+.narrow #filters.filters-open Select, .medium #filters.filters-open #project {
+    display: block;
+    width: 1fr;
+    margin: 0;
+}
+
+.medium #filters.filters-open {
+    layout: vertical;
+}
+
+.medium #filters.filters-open Select {
+    width: 1fr;
+    margin: 0;
 }
 
 #body {

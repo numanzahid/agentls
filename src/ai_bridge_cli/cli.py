@@ -81,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = Parser(prog=prog_name(), description=__doc__, epilog=EPILOG, formatter_class=fmt)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     groups = p.add_subparsers(dest="group", metavar="COMMAND")
+    shell = groups.add_parser("shell-init", help="print opt-in shell integration (source the output)")
+    shell.add_argument("shell", choices=("bash",))
 
     s = groups.add_parser("sessions", help="native local sessions (browse, list, open, archive, delete)",
                           description="Native Claude Code, Codex and Cursor CLI sessions on this account.")
@@ -435,6 +437,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     args = parser.parse_args(argv)
+    if args.group == "shell-init":
+        from .shell import bash_init
+        print(bash_init(), end="")
+        return 0
     if not args.group:
         parser.print_help()
         return 0

@@ -96,7 +96,7 @@ class ChoiceScreen(Dialog):
 
 class SettingsScreen(ChoiceScreen):
     def __init__(self, mode: str, config_path: str):
-        super().__init__("Settings · native Open / Fork behavior", [
+        super().__init__("5 Settings · native Open / Fork behavior", [
             ("exec", "A · Close browser and exec native CLI (default)",
              "Same process, in the chat's project directory. Browser does not return."),
             ("suspend", "B · Suspend browser and return afterwards",
@@ -139,6 +139,7 @@ class HelpScreen(Dialog):
 
     KEYS = [
         ("Navigation", [("↑/↓ PgUp/PgDn Home/End", "move"), ("/", "search (Esc returns to the list)"),
+                        ("1 / 2 / 3 / 4 / 5", "search / sessions / details / filters / settings (outside text entry)"),
                         ("Tab / Shift+Tab", "move between search, filters and list"),
                         ("s / S", "cycle sort key / reverse order (or click a column header)"),
                         ("p", "toggle details & preview pane"), ("r / F5", "refresh")]),

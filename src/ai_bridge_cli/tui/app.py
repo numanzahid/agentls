@@ -70,6 +70,8 @@ class SessionBrowser(App):
     SUB_TITLE = "local agent sessions"
 
     BINDINGS = [
+        *[Binding(str(n), f"focus_pane({n})", label, priority=True, show=False)
+          for n, label in enumerate(("Search", "Sessions", "Details", "Filters", "Settings"), 1)],
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "help", "Help"),
         Binding("ctrl+s,f2", "settings", "Settings", priority=True),
@@ -134,6 +136,7 @@ class SessionBrowser(App):
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static("1 Search · 2 Sessions · 3 Details · 4 Filters · 5 Settings", id="pane-nav")
         with Horizontal(id="filters"):
             yield Input(placeholder="Search title, project, ID, model…  ( / )", id="search")
             yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
@@ -525,7 +528,7 @@ class SessionBrowser(App):
 
     @on(Input.Submitted, "#search")
     def _search_done(self, event: Input.Submitted) -> None:
-        self._q("#table", DataTable).focus()
+        self.action_focus_pane(2)
 
     @on(Select.Changed)
     def _filter(self, event: Select.Changed) -> None:
@@ -541,6 +544,37 @@ class SessionBrowser(App):
         self._rebuild_table()
 
     # -- actions: navigation ------------------------------------------------
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "focus_pane":
+            # Text fields and modal/expanded choices retain their own digit handling.
+            return (len(self.screen_stack) == 1 and not isinstance(self.focused, Input)
+                    and not any(select.expanded for select in self._q("#filters").query(Select)))
+        return True
+
+    def action_focus_pane(self, pane: int) -> None:
+        if pane == 1:
+            self.action_focus_search()
+        elif pane == 2:
+            self._q("#filters").remove_class("filters-open")
+            if self.tier != "wide":
+                self.details_open = False
+                self._layout_side()
+                self._rebuild_table()
+            self._q("#table", DataTable).focus()
+        elif pane == 3:
+            self._q("#filters").remove_class("filters-open")
+            self.details_open = True
+            self._layout_side()
+            self._rebuild_table()
+            self._q("#side").focus()
+            self._schedule_preview()
+        elif pane == 4:
+            if self.tier != "wide":
+                self._q("#filters").add_class("filters-open")
+            self._q("#agent", Select).focus()
+        elif pane == 5:
+            self.action_settings()
+
     def action_focus_search(self) -> None:
         self._q("#search", Input).focus()
 
@@ -549,7 +583,9 @@ class SessionBrowser(App):
         if self.focused is search:
             if search.value:
                 search.value = ""
-            self._q("#table", DataTable).focus()
+            self.action_focus_pane(2)
+        elif self._q("#filters").has_class("filters-open"):
+            self.action_focus_pane(2)
         elif self.details_open and self.tier != "wide":
             self.action_toggle_details()
         elif self.marked:

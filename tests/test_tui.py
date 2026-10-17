@@ -488,3 +488,48 @@ def test_incomplete_delete_preview_gives_safe_alternatives(populated):
     text = out.getvalue()
     assert "does not prove" in text and "Archive (a)" in text and "never bypasses" in text
     assert not plan.allowed
+
+
+@pytest.mark.parametrize('width', [40, 60, 100, 150])
+def test_numbered_focus_shortcuts(populated, width):
+    async def scenario(app, pilot):
+        assert '1 Search' in str(app._q('#pane-nav').render())
+        await pilot.press('3')
+        await pilot.pause()
+        assert app.focused.id == 'side' and app._q('#side').display
+        await pilot.press('2')
+        await pilot.pause()
+        assert app.focused.id == 'table' and app._q('#table').display
+        app.details_open = False
+        app._layout_side()
+        await pilot.press('3')
+        await pilot.pause()
+        assert app.focused.id == 'side' and app._q('#side').display
+        await pilot.press('4')
+        await pilot.pause()
+        assert app.focused.id == 'agent'
+        for select in app._q('#filters').query('Select'):
+            assert select.display
+        assert app.focused.region.width > 0
+        await pilot.press('2', '1', '1', '2', '3', '4', '5')
+        await pilot.pause()
+        assert app.focused.id == 'search' and app._q('#search').value == '12345'
+        await pilot.press('enter', '5')
+        await pilot.pause()
+        assert isinstance(app.screen, screens.SettingsScreen)
+        await pilot.press('1', '2', '3', '4', '5')
+        assert isinstance(app.screen, screens.SettingsScreen)
+        await pilot.press('escape')
+        assert app.focused.id == 'table'
+    drive(scenario, size=(width, 24))
+
+
+def test_numbers_leave_expanded_filter_alone(populated):
+    async def scenario(app, pilot):
+        await pilot.press('4', 'enter')
+        await pilot.pause()
+        assert app._q('#agent').expanded
+        await pilot.press('3', '5')
+        assert app._q('#agent').expanded
+        assert not isinstance(app.screen, screens.SettingsScreen)
+    drive(scenario)

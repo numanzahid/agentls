@@ -98,6 +98,7 @@ ai-bridge --help                # every command; each subcommand has its own --h
 | `↑ ↓ PgUp PgDn Home End` | move |
 | `/` | search (title, alias, project, ID, model); `Esc` returns to the list |
 | `Tab` | move between search, filters and the list |
+| `1` / `2` / `3` / `4` / `5` | focus search / sessions / details / filters / open settings |
 | `s` / `S` / click header | cycle sort key / reverse |
 | `Space`, `*`, `Esc` | mark row, mark all visible (again: clear), clear marks |
 | `Enter` / `o` | open (resume) in the native CLI, after a preflight and confirmation |
@@ -120,6 +121,12 @@ appear as space permits. Long models are ellipsized in the list; `p` shows the f
 in details, including on narrow terminals. Medium terminals hide the project filter, and
 narrow terminals use short agent names and details as a full-screen toggle. Store errors,
 an empty store, or no matches are shown in place rather than as an empty table.
+
+The numbered navigation labels stay visible above the search bar. Digits type normally in
+search and other text inputs; press Enter or Esc to leave search before using them to navigate.
+Dialogs and expanded filter menus retain their own keyboard handling. `3` reveals hidden
+details; `2` returns to the session list on narrow terminals. `4` reveals all filters vertically
+when space is limited; `2`, `3` or Esc collapses them again.
 
 Last Model uses Claude assistant message models (excluding sidechains and synthetic placeholders),
 Codex turn-context models, and Cursor chat metadata's `lastUsedModel`. Missing or invalid newer
@@ -274,6 +281,35 @@ CLI in the saved project directory. There is no Python parent waiting for the ag
 observe the native process. Exiting the agent does not return to the browser. If the final
 recheck or exec fails after teardown, a plain terminal error explains how to reopen the browser.
 Earlier refusals and cancelled confirmations keep the browser open.
+
+An executed child cannot change the waiting parent shell's working directory. Without shell
+integration, exiting the native agent returns to the directory where you ran `ai-bridge`
+(for example HOME), even though the agent ran in the saved project.
+
+To opt into returning Bash to the saved project after a close/exec launch, run this in your
+interactive Bash, and add the same line to `~/.bashrc` if you want it in future shells:
+
+```bash
+eval "$(command ai-bridge shell-init bash)"
+```
+
+This defines functions for both `ai-bridge` and `ai-bridge-cli`. They call the installed command,
+wait for it, then use Bash's own `cd` on the saved launch directory. Native launch still directly
+replaces Python, preserving its PID and allowing tmux's `#{pane_current_command}` automatic
+rename to see the agent. No tmux panes/windows are created, and no tmux or shell config is edited.
+Each invocation uses a fresh private temporary directory with a NUL-terminated cwd handoff;
+paths are read as data, never evaluated. The handoff variable is stripped from the native
+environment. The wrapper cleans up on ordinary return and preserves the command's exit status,
+including nonzero native exits. Cancellation, dry runs, failed exec and suspend mode do not
+change the parent shell's cwd. If the project disappears before return, Bash reports the failed
+`cd` and keeps its current directory. Killing the shell itself can leave a temporary directory.
+
+Use the function in the shell you want to move: `command ai-bridge`, an external script,
+`bash -c`, a subshell or `exec ai-bridge` bypasses the parent-shell handoff. Only Bash integration
+is provided. Disable for the current shell with `unset -f ai-bridge ai-bridge-cli _ai_bridge_shell_run`.
+The returned directory is the saved launch project, not any directory the native agent later visits.
+With tmux bindings that use `-c '#{pane_current_path}'`, future panes inherit the project once
+the waiting shell has changed directory. Such bindings alone cannot change an existing shell's cwd.
 
 Press **Ctrl+S or F2** to choose **A: close/exec (default)** or **B: suspend and return**.
 Use arrow keys then Enter to save, or Esc to cancel. B keeps the browser alive while the native

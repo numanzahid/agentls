@@ -17,6 +17,7 @@ from . import activity as activity_mod
 from . import paths
 from .fsutil import UnsafePath, lstat_at, pinned_parent, private_primary_group
 from .model import Session
+from .shell import cwd_handoff
 
 _HELP_CACHE: dict[tuple, str] = {}
 
@@ -206,8 +207,9 @@ def exec_(plan_: LaunchPlan):
     previous = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         os.chdir(plan_.cwd)
-        os.execvpe(plan_.argv[0], plan_.argv, native_env())
-    except OSError as error:
+        with cwd_handoff(plan_.cwd):
+            os.execvpe(plan_.argv[0], plan_.argv, native_env())
+    except (OSError, ValueError) as error:
         raise PreflightError(f"Could not start {plan_.argv[0]}: {error}") from None
     finally:
         os.fchdir(previous)
