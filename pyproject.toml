@@ -30,7 +30,7 @@ test = ["pytest>=8"]
 ai-bridge = "ai_bridge_cli.cli:main"
 ai-bridge-cli = "ai_bridge_cli.cli:main"
 
-# Single source of truth: ai_bridge_cli.__version__ (see "Releasing" in README.md).
+# Single source of truth: ai_bridge_cli.__version__ (see docs/development.md, "Releasing").
 [tool.setuptools.dynamic]
 version = { attr = "ai_bridge_cli.__version__" }
 
