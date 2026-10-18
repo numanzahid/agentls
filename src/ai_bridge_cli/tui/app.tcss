@@ -48,42 +48,29 @@ Screen {
     width: 28;
 }
 
-.medium #filters #project {
-    display: none;
+/* Below the wide tier, filters stay visible on their own row under search. */
+.narrow #filters, .medium #filters {
+    layout: vertical;
 }
 
-.narrow #filters Select {
-    display: none;
+.narrow #filter-controls, .medium #filter-controls {
+    layout: grid;
+    grid-size: 4;
+    grid-gutter: 0 1;
+    grid-rows: 1;
+    width: 1fr;
+    height: auto;
+    margin-left: 0;
 }
 
 .narrow #filter-controls {
-    display: none;
+    grid-size: 2;
 }
 
-.narrow #filters.filters-open {
-    layout: vertical;
-}
-
-.narrow #filters.filters-open Select, .medium #filters.filters-open #project {
-    display: block;
+.narrow #filters Select, .medium #filters Select,
+.narrow #filters #project, .medium #filters #project {
     width: 1fr;
-    margin: 0;
-}
-
-.medium #filters.filters-open {
-    layout: vertical;
-}
-
-.narrow #filters.filters-open #filter-controls, .medium #filters.filters-open #filter-controls {
-    display: block;
-    layout: vertical;
-    width: 1fr;
-    margin: 0;
-}
-
-.medium #filters.filters-open Select {
-    width: 1fr;
-    margin: 0;
+    margin-left: 0;
 }
 
 #body {

@@ -568,22 +568,18 @@ class SessionBrowser(App):
         if pane == 1:
             self.action_focus_search()
         elif pane == 3:
-            self._q("#filters").remove_class("filters-open")
             if self.tier != "wide":
                 self.details_open = False
                 self._layout_side()
                 self._rebuild_table()
             self._q("#table", DataTable).focus()
         elif pane == 4:
-            self._q("#filters").remove_class("filters-open")
             self.details_open = True
             self._layout_side()
             self._rebuild_table()
             self._q("#side").focus()
             self._schedule_preview()
         elif pane == 2:
-            if self.tier != "wide":
-                self._q("#filters").add_class("filters-open")
             self._q("#agent", Select).focus()
         elif pane == 5:
             self.action_settings()
@@ -594,8 +590,7 @@ class SessionBrowser(App):
     def action_escape(self) -> None:
         if (self.focused is self._q("#search", Input)
                 or self._q("#filter-controls").has_focus_within
-                or self._q("#side").has_focus_within
-                or self._q("#filters").has_class("filters-open")):
+                or self._q("#side").has_focus_within):
             self.action_focus_pane(3)
         elif self.details_open and self.tier != "wide":
             self.action_toggle_details()

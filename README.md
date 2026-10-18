@@ -120,15 +120,15 @@ ai-bridge --help                # every command; each subcommand has its own --h
 The layout adapts to the terminal width. Wide terminals show the details pane beside the list.
 Title and Last Model appear first; secondary columns (updated, status, origin, project)
 appear as space permits. Long models are ellipsized in the list; `p` shows the full value
-in details, including on narrow terminals. Medium terminals hide the project filter, and
-narrow terminals use short agent names and details as a full-screen toggle. Store errors,
+in details, including on narrow terminals. Below the wide layout, all four filters stay
+visible on a row under search (two per line on narrow terminals), and narrow terminals use
+short agent names and details as a full-screen toggle. Store errors,
 an empty store, or no matches are shown in place rather than as an empty table.
 
 The numbered navigation labels stay visible above the search bar. Digits type normally in
 search and other text inputs; press Enter or Esc to leave search before using them to navigate.
 Dialogs and expanded filter menus retain their own keyboard handling. `4` reveals hidden
-details; `3` returns to the session list on narrow terminals. `2` reveals all filters vertically
-when space is limited; `3`, `4` or Esc collapses them again.
+details; `3` returns to the session list on narrow terminals. `2` focuses the filters.
 
 Each pane has a numbered border heading. The focused pane's border and heading use the accent
 color, including while a filter dropdown is open. Yellow chat marks indicate selection;
