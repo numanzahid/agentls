@@ -22,7 +22,7 @@
 | `A` | show / hide archived sessions |
 | `p` | details and preview |
 | `y` | copy `agent:ID` to the clipboard (OSC 52) |
-| `r` / `F5` | refresh (also automatic every 20 s) |
+| `r` / `F5` | refresh (also automatic, every 60 s by default; change it in settings) |
 | `Ctrl+S` / `F2` | settings |
 | `?` / `q` | help / quit |
 

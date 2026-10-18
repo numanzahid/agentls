@@ -98,8 +98,12 @@ Screen {
 #table {
     width: 1fr;
     height: 1fr;
-    scrollbar-gutter: stable;
     border: round $foreground;
+}
+
+/* Main panes draw lazygit's ▐ thumb on their right border (BorderScrollbar); no scrollbar column. */
+#table, #side, BoxScroll {
+    scrollbar-size-vertical: 0;
 }
 
 #side {
@@ -135,10 +139,12 @@ Screen {
 }
 
 /* -- dialogs ---------------------------------------------------------- */
+/* lazygit popups: no backdrop, a round border in the focus color with the title in it, flat
+   one-line buttons and a blue selected line. Dialog.on_mount moves .box-title into the border. */
 
 .dialog {
     align: center middle;
-    background: $background 60%;
+    background: transparent;
 }
 
 .box {
@@ -146,9 +152,12 @@ Screen {
     max-width: 95%;
     height: auto;
     max-height: 90%;
-    padding: 1 2;
-    border: thick $primary;
-    background: $surface;
+    padding: 0 1;
+    border: round $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+    border-title-align: left;
+    background: $background;
 }
 
 .box.wide {
@@ -156,12 +165,56 @@ Screen {
 }
 
 .box.danger {
-    border: thick $error;
+    border: round $error;
+    border-title-color: $error;
 }
 
 .box-title {
+    display: none;
+}
+
+.box Button {
+    height: 1;
+    min-width: 8;
+    border: none;
+    padding: 0 1;
+    background: transparent;
+    color: $foreground;
+    text-style: none;
+}
+
+.box Button.-primary {
+    color: $primary;
+}
+
+.box Button.-error {
+    color: $error;
+}
+
+.box Button:hover {
+    text-style: underline;
+}
+
+.box Button:focus {
+    background: $primary;
+    color: $foreground;
     text-style: bold;
-    margin-bottom: 1;
+}
+
+.box Button.-error:focus {
+    background: $error;
+}
+
+.box OptionList, .box DataTable {
+    background: transparent;
+    border: none;
+}
+
+.box OptionList > .option-list--option-highlighted,
+.box DataTable > .datatable--cursor {
+    background: $primary;
+    color: $foreground;
+    text-style: bold;
 }
 
 .box-body {
@@ -169,7 +222,22 @@ Screen {
     max-height: 30;
 }
 
-.box Input {
+/* lazygit prompts: a plain text line inside the popup, no inner box. */
+.box Input, .box Input:focus {
+    width: 100%;
+    height: 1;
+    margin: 1 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: $foreground;
+}
+
+.box DataTable > .datatable--header {
+    background: transparent;
+}
+
+#explain {
     margin: 1 0;
 }
 

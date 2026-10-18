@@ -1,17 +1,26 @@
 """Modal screens for the session browser. All user data is rendered as plain Text."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+from .. import settings
+from .scrollbar import BorderScrollbar
 from ..output import relative
 from ..textsafe import one_line, safe
+
+
+class BoxScroll(BorderScrollbar, VerticalScroll):
+    """A scrolling dialog box with lazygit's ▐ thumb on its border."""
 
 
 class Dialog(ModalScreen):
@@ -19,6 +28,12 @@ class Dialog(ModalScreen):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
     DEFAULT_CLASSES = "dialog"
+
+    def on_mount(self) -> None:
+        # lazygit style: the title sits in the box's top border (the label is hidden by CSS).
+        boxes, titles = list(self.query(".box")), list(self.query(".box-title"))
+        if boxes and titles:
+            boxes[0].border_title = Content(getattr(titles[0].content, "plain", str(titles[0].content)))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -150,44 +165,72 @@ class InputScreen(Dialog):
         self.dismiss(self.query_one(Input).value if event.button.id == "save" else None)
 
 
-class ChoiceScreen(Dialog):
-    """Pick one of several labelled options (first option is the default)."""
+def refresh_label(seconds: int) -> str:
+    if not seconds:
+        return "Off (r / F5 only)"
+    return f"Every {seconds} seconds" if seconds < 120 else f"Every {seconds // 60} minutes"
 
-    def __init__(self, title: str, choices: list[tuple[str, str, str]], note: str = ""):
+
+class SettingsScreen(Dialog):
+    """lazygit-style settings menu: Enter toggles or picks the highlighted item and saves it at once;
+    the explanation for the highlighted item is shown separately below the list. Esc closes."""
+
+    EXPLAIN = {
+        "return": "On: Open / Fork suspend the browser and run the native CLI as a child; the browser "
+                  "comes back when it exits.\nOff (default): the browser closes and the native CLI replaces "
+                  "it in the same terminal, in the chat's project directory.",
+        "refresh": "How often the session list rescans the Claude, Codex and Cursor stores while open. "
+                   "Skipped while a dialog is open. r / F5 refreshes at any time.",
+    }
+
+    def __init__(self, current: settings.Settings, config_path: str, save):
         super().__init__()
-        self.title_text, self.choices, self.note = title, choices, note
+        self.current, self.config_path, self.save = current, config_path, save
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="box"):
-            yield Label(Text(self.title_text), classes="box-title")
-            if self.note:
-                yield Static(Text(self.note, style="dim"))
-            yield OptionList(*[Option(Text.assemble((label, "bold"), "\n  ", (hint, "dim")), id=value)
-                               for value, label, hint in self.choices], id="choices")
-            yield Static(Text("Enter choose · Esc cancel", style="dim"))
+            yield Label("Settings", classes="box-title")
+            yield OptionList(id="choices")
+            yield Static(id="explain")
+            yield Static(Text(f"Saved for this user in {safe(self.config_path)}", style="dim"))
+            yield Static(Text("Enter toggle / choose · Esc close", style="dim"))
+
+    def _fill(self, highlighted: str | None = None) -> None:
+        options = self.query_one(OptionList)
+        options.clear_options()
+        on = self.current.launch_mode == "suspend"
+        options.add_option(Option(Text.assemble(("Open / Fork", "bold underline")), disabled=True))
+        options.add_option(Option(Text.assemble((" ON  " if on else " OFF ", "bold green reverse" if on else "dim reverse"),
+                                                "  Return to the browser after the native CLI exits"),
+                                  id="return"))
+        options.add_option(None)
+        options.add_option(Option(Text("Auto refresh", style="bold underline"), disabled=True))
+        for seconds in settings.REFRESH_CHOICES:
+            mark = "● " if seconds == self.current.refresh_seconds else "○ "
+            default = " (default)" if seconds == settings.Settings().refresh_seconds else ""
+            options.add_option(Option(Text(mark + refresh_label(seconds) + default), id=f"refresh:{seconds}"))
+        target = highlighted or "return"
+        options.highlighted = options.get_option_index(target)
 
     def on_mount(self) -> None:
+        self._fill()
         self.query_one(OptionList).focus()
 
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        key = (event.option.id or "").split(":")[0]
+        self.query_one("#explain", Static).update(Text(self.EXPLAIN.get(key, ""), style="italic"))
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(event.option.id)
-
-
-class SettingsScreen(ChoiceScreen):
-    def __init__(self, mode: str, config_path: str):
-        super().__init__("5 Settings · native Open / Fork behavior", [
-            ("exec", "A · Close browser and exec native CLI (default)",
-             "Same process, in the chat's project directory. Browser does not return."),
-            ("suspend", "B · Suspend browser and return afterwards",
-             "Native CLI runs as a child; browser returns when it exits."),
-        ], note=f"Current: {'A · exec' if mode == 'exec' else 'B · suspend'}\n"
-                f"Enter saves for this user · Esc cancels\n"
-                f"Session safety: x Stop · D Force delete · always confirm; no daemon kill or automatic native SIGKILL.\n{safe(config_path)}")
-        self.mode = mode
-
-    def on_mount(self) -> None:
-        super().on_mount()
-        self.query_one(OptionList).highlighted = 0 if self.mode == "exec" else 1
+        choice = event.option.id or ""
+        if choice == "return":
+            preference = replace(self.current, launch_mode="exec" if self.current.launch_mode == "suspend" else "suspend")
+        elif choice.startswith("refresh:"):
+            preference = replace(self.current, refresh_seconds=int(choice.removeprefix("refresh:")))
+        else:
+            return
+        if self.save(preference):
+            self.current = preference
+            self._fill(choice)
 
 
 def plan_table(plan: dict) -> Table:
@@ -233,13 +276,13 @@ class HelpScreen(Dialog):
                      ("d / Del", "remove choices: recoverable delete / Stop session / Force delete"),
                      ("x / D", "Stop session / Force delete (separate confirmation)"),
                      ("t", "trash: restore or purge"), ("y", "copy agent:ID"), ("A", "show/hide archived"),
-                     ("Ctrl+S / F2", "settings: close/exec native (default) or suspend and return"),
+                     ("Ctrl+S / F2", "settings: return to the browser after Open / Fork; auto refresh interval"),
                      ("q", "quit")]),
     ]
 
     def compose(self) -> ComposeResult:
         table = Table.grid(padding=(0, 2))
-        table.add_column(style="bold cyan", no_wrap=True)
+        table.add_column(style="bold cyan", no_wrap=True, min_width=24)
         table.add_column()
         for section, rows in self.KEYS:
             table.add_row(Text(section, style="bold underline"), "")
@@ -255,11 +298,10 @@ class HelpScreen(Dialog):
             "change with Filters → Mode · ", ("↳", "dim"), " subagent\n",
             ("Last Model  ", "bold"), "last known model recorded in this chat; — = unknown. "
             "Full value in details (p); configured defaults are never substituted.")
-        with Vertical(classes="box wide"):
+        with BoxScroll(classes="box wide"):  # the whole box scrolls; its thumb is on the border
             yield Label("Keyboard help", classes="box-title")
-            with VerticalScroll(classes="box-body"):
-                yield Static(table)
-                yield Static(legend)
+            yield Static(table)
+            yield Static(legend)
             yield Static(Text("Esc / ? close", style="dim"))
 
 

@@ -32,7 +32,7 @@ from ..model import SORT_KEYS, Session
 from ..output import relative
 from ..scanners import history
 from ..textsafe import one_line, safe
-from .scrollbar import ThinScrollBarRender
+from .scrollbar import BorderScrollbar, ThinScrollBarRender
 from .screens import (ConfirmScreen, DeleteConfirmScreen, HelpScreen, InputScreen, RemoveScreen,
                       SettingsScreen, TrashScreen)
 
@@ -41,7 +41,6 @@ AGENT_SHORT = {"claude": "cl", "codex": "cx", "cursor": "cu"}
 STATUS_STYLE = {"active": "bold green", "uncertain": "bold yellow", "recent": "cyan", "idle": "dim"}
 STATUS_ICON = {"active": "●", "uncertain": "◐", "recent": "○", "idle": "·"}
 ORIGIN_LABEL = {"mcp": ("MCP", "bold magenta"), "direct": ("Direct", ""), "unknown": ("Unknown", "dim")}
-AUTO_REFRESH_SECONDS = 20
 PREVIEW_USER_MESSAGES = 5  # the preview shows these plus the agent's last reply; no tool output
 WIDE, MEDIUM = 130, 90
 
@@ -104,9 +103,13 @@ class KeyBar(Static):
         self.update(Text(" | ".join(items), no_wrap=True, overflow="ellipsis"))
 
 
-class SessionTable(DataTable):
+class SessionTable(BorderScrollbar, DataTable):
     def on_resize(self) -> None:
         self.app._update_status()  # the top-border count is laid out for this width
+
+
+class SidePane(BorderScrollbar, VerticalScroll):
+    pass
 
 
 ScrollBar.renderer = ThinScrollBarRender  # lazygit-style thin thumb, no track
@@ -159,6 +162,7 @@ class SessionBrowser(App):
         self.last_error: str | None = None
         self._preview_cache: dict[tuple, list[dict] | str] = {}
         self._preview_timer = None
+        self._refresh_timer = None
         self._preview_key: str | None = None
         self._refresh_lock = threading.Lock()
         self.settings = settings.Settings()
@@ -200,7 +204,7 @@ class SessionBrowser(App):
                 yield Select([("All projects", "all")], value="all", allow_blank=False, id="project", compact=True)
         with Horizontal(id="body"):
             yield SessionTable(id="table", cursor_type="row")
-            with VerticalScroll(id="side"):
+            with SidePane(id="side"):
                 yield Static(id="details")
                 yield Static(id="preview")
         yield Static(Text("Scanning sessions…"), id="empty")
@@ -216,8 +220,7 @@ class SessionBrowser(App):
         self._q("#table", DataTable).focus()
         self._apply_tier(force=True)
         self.refresh_catalog(initial=True)
-        if self.periodic_refresh:
-            self.set_interval(AUTO_REFRESH_SECONDS, self._auto_refresh)
+        self._schedule_auto_refresh()
 
     def on_resize(self) -> None:
         # App/screen geometry is updated after the resize event is dispatched.
@@ -289,6 +292,14 @@ class SessionBrowser(App):
             self._update_project_options()
         self.loaded = True
         self._rebuild_table()
+
+    def _schedule_auto_refresh(self) -> None:
+        """(Re)start the auto-refresh timer from the saved interval; 0 turns it off."""
+        if self._refresh_timer is not None:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
+        if self.periodic_refresh and self.settings.refresh_seconds:
+            self._refresh_timer = self.set_interval(self.settings.refresh_seconds, self._auto_refresh)
 
     def _auto_refresh(self) -> None:
         if len(self.screen_stack) == 1 and not self.scanning:
@@ -732,22 +743,18 @@ class SessionBrowser(App):
         if len(self.screen_stack) != 1:
             return
 
-        def chosen(mode):
-            if mode is None:
-                return
-            preference = settings.Settings(launch_mode=mode)
+        def save(preference: settings.Settings) -> bool:
             try:
                 settings.save(preference)
             except (OSError, ValueError) as error:
                 self.notify(f"Settings not saved: {error}", severity="error", markup=False, timeout=12)
-                return
+                return False
             self.settings = preference
             self.settings_error = None
-            self.notify("Saved: close browser and exec native CLI." if mode == "exec" else
-                        "Saved: suspend browser and return when native CLI exits.", markup=False)
+            self._schedule_auto_refresh()
+            return True
 
-        self.push_screen(SettingsScreen(self.settings.launch_mode, str(paths.cli_config_dir() / "settings.json")),
-                         chosen)
+        self.push_screen(SettingsScreen(self.settings, str(paths.cli_config_dir() / "settings.json"), save))
 
     def _require_idle(self) -> bool:
         if self.scanning and not self.by_key:

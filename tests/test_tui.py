@@ -430,20 +430,21 @@ def test_settings_keyboard_saves_and_reloads(populated, shortcut):
         await pilot.press(shortcut)
         await pilot.pause()
         assert isinstance(app.screen, screens.SettingsScreen)
-        assert app.screen.query_one("OptionList").highlighted == 0
-        await pilot.press("down", "enter")
+        options = app.screen.query_one("OptionList")
+        assert options.get_option_at_index(options.highlighted).id == "return"
+        assert "OFF" in str(options.get_option("return").prompt)
+        assert "browser closes" in str(app.screen.query_one("#explain").render())  # explainer, separate
+        await pilot.press("enter")  # toggle on: saved at once, menu stays open
         await pilot.pause()
+        assert isinstance(app.screen, screens.SettingsScreen) and "ON" in str(options.get_option("return").prompt)
         assert app.settings.launch_mode == settings.load().launch_mode == "suspend"
         assert browser().settings.launch_mode == "suspend"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, screens.SettingsScreen)
         await pilot.press(shortcut)
         await pilot.pause()
-        assert app.screen.query_one("OptionList").highlighted == 1
-        await pilot.press("up", "escape")
-        await pilot.pause()
-        assert app.settings.launch_mode == "suspend"  # Escape does not save
-        await pilot.press(shortcut)
-        await pilot.pause()
-        await pilot.press("up", "enter")
+        await pilot.press("enter")
         await pilot.pause()
         assert browser().settings.launch_mode == "exec"
     drive(scenario)
@@ -519,6 +520,27 @@ def test_open_recheck_refusal_keeps_browser(populated, monkeypatch, failure):
     drive(scenario)
 
 
+def test_settings_change_auto_refresh_interval(populated):
+    async def scenario(app, pilot):
+        app.periodic_refresh = True
+        app._schedule_auto_refresh()
+        assert app.settings.refresh_seconds == 60 and app._refresh_timer._interval == 60
+        await pilot.press("f2")
+        await pilot.pause()
+        options = app.screen.query_one("OptionList")
+        assert "● Every 60 seconds (default)" in str(options.get_option("refresh:60").prompt)
+        options.highlighted = options.get_option_index("refresh:0")
+        await pilot.pause()
+        assert "rescans" in str(app.screen.query_one("#explain").render())
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app._refresh_timer is None and settings.load().refresh_seconds == 0
+        assert "● Off" in str(options.get_option("refresh:0").prompt)
+        assert settings.load().launch_mode == "exec"  # the other setting is kept
+        assert app.screen.query_one(".box").border_title == "Settings"
+    drive(scenario)
+
+
 def test_settings_failure_keeps_current_mode(populated, monkeypatch):
     def fail(preference):
         raise ValueError("unsafe config")
@@ -527,9 +549,10 @@ def test_settings_failure_keeps_current_mode(populated, monkeypatch):
     async def scenario(app, pilot):
         await pilot.press("f2")
         await pilot.pause()
-        await pilot.press("down", "enter")
+        await pilot.press("enter")
         await pilot.pause()
         assert app.settings.launch_mode == "exec"
+        assert "OFF" in str(app.screen.query_one("OptionList").get_option("return").prompt)
     drive(scenario)
 
 
@@ -1079,7 +1102,7 @@ def test_removal_modal_layout_is_balanced_and_unclipped(env, width, kind):
             label = button.label.plain
             assert label[1] == ' ' and label[0].isalpha()
             assert button.region.width >= len(label) + (0 if screen.query_one('.removal').has_class('stacked') else 2)
-            assert button.region.height == (1 if width < screens.RemoveScreen.STACK_BELOW else 3)
+            assert button.region.height == 1  # flat lazygit-style buttons
         top = [buttons[i].region for i in ('archive', 'trash', 'cancel')]
         bottom = [buttons[i].region for i in ('stop', 'force')]
         if width < screens.RemoveScreen.STACK_BELOW:
@@ -1116,3 +1139,31 @@ def test_preview_shows_last_user_messages_and_last_reply_only(populated):
         assert text.startswith("Your last 5 messages") and "Last reply\n\nfinal answer" in text
         assert "ls -la" not in text and "ask 1" not in text
     drive(scenario)
+
+
+@pytest.mark.parametrize("list_size,page,position,area,expected", [
+    (5, 10, 0, 20, (0, 20)), (10, 10, 0, 20, (0, 20)), (10, 5, 0, 20, (0, 10)), (10, 5, 5, 20, (10, 10)),
+    (15, 5, 5, 21, (7, 7)), (15, 5, 10, 21, (14, 7)), (15, 5, 1, 21, (2, 7)), (15, 5, 9, 21, (12, 7)),
+])
+def test_scrollbar_thumb_matches_gocui(list_size, page, position, area, expected):
+    from ai_bridge_cli.tui.scrollbar import lazygit_thumb  # cases from gocui's scrollbar_test.go
+    assert lazygit_thumb(list_size, page, position, area) == expected
+
+
+def test_scroll_thumb_is_drawn_on_the_list_border(env):
+    for i in range(30):
+        fixtures.claude_session(env.claude, f"5c1f0e2a-7b3d-4c9e-8a61-{i:012d}", env.project, f"chat {i}")
+    fixtures.age(env.claude, env.codex, env.cursor)
+
+    async def scenario(app, pilot):
+        table = app.query_one("#table")
+        rows = table.thumb_rows()
+        assert rows and rows.start == 1  # at the top: the thumb starts right under the top border
+        right = table.outer_size.width - 1
+        lines = table.render_lines(table.region.reset_offset)
+        assert "".join(s.text for s in lines[rows.start].crop(right, right + 1)) == "▐"
+        assert "".join(s.text for s in lines[rows.stop].crop(right, right + 1)) == "│"
+        table.move_cursor(row=table.row_count - 1, animate=False)
+        await settle(pilot, app)
+        assert table.thumb_rows().stop == table.size.height + 1  # snapped to the bottom
+    drive(scenario, size=(150, 20))
