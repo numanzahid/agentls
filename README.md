@@ -12,7 +12,7 @@ on the same account.
 * Multi-select, details and conversation preview, rename (display alias), archive / unarchive.
 * Open (resume) or fork a session in its native CLI after a preflight; by default the browser
   exits and exec-replaces itself with the agent. Settings can select suspend and return instead.
-* Explicit native delete into a restorable trash, with preflight checks.
+* Explicit native removal into a restorable trash, plus confirmed permanent deletion of already archived Codex chats.
 * Headless `--json` / table commands for scripts.
 
 It is a standalone Python package. It never imports the ai-bridge server and works without it.
@@ -199,10 +199,35 @@ changes no native files. Aliases and archive flags live in `~/.local/state/ai-br
 Aliases and archive flags written by older ai-bridge CLIs in the server's state directory are
 still honoured, read-only.
 
-**Delete (move to trash)** is explicit and never unlinks native session files. In the TUI,
-the `a` Archive / `d` Delete / `c` Cancel modal is the final confirmation for safe deletion;
+**Delete (move to trash)** is explicit and never directly unlinks native session files. In the TUI,
+the `a` Archive / `d` Delete / `c` Cancel modal is the final confirmation for recoverable removal;
+Codex rows label these choices **Hide** and **Native archive** to distinguish their effects.
 Cancel has initial focus. Preflight runs before the modal and is checked again on execution.
 If any selected chat is blocked, none of the selection is deleted.
+
+**Permanently delete an already archived Codex chat (TUI only):** press `A` to show
+archived chats, select one row marked `[codex-archived]`, press `d`, then choose
+`d Permanently delete` (the `a Hide` choice only hides the row). A separate irreversible-deletion warning displays the full
+UUID and `CODEX_HOME`, and warns that descendant chats (including subagents) may
+also be removed. Only `y` or clicking **Permanently delete** confirms; `n`, Escape,
+or Enter on the initially focused **Cancel** cancels. Mixed/multiple selections
+are refused. An ordinary hidden chat is not eligible: it must already be natively
+archived, so ordinary unarchived Codex removal remains recoverable.
+
+After confirmation, the tool rechecks the installed CLI's advertised
+`delete <SESSION>` and `--force`, the exact native archive location and index
+(when present), full UUID metadata, user ownership, file identities, descendants,
+bridge jobs, complete process inspection and startup state. Symlinks, traversal,
+recent writes and active/uncertain sessions are refused. The archive-specific
+stale-daemon-handle exemption is not extended to permanent deletion. It then runs
+`codex delete --force <full UUID>` in a separate subprocess with no shell, closed
+stdin, a timeout and bounded output. Native Codex owns consistency, descendants
+and reference checks; busy threads or unsafe references are reported as refusals.
+No shared daemon is stopped, no rollout is directly unlinked, and no SQLite rows
+are edited by ai-bridge-cli. The list is refreshed after errors as well as success;
+a timeout, failure or disagreement between the native result, index and files
+does not produce a success message. Permanent deletion has **no trash restore**.
+The headless `sessions delete` command continues to provide recoverable removal only.
 
 Only when an exclusive native `codex resume UUID` process is the sole blocker can the TUI
 offer **Kill process and delete**. This separate confirmation names the PID and exact session
@@ -394,7 +419,6 @@ characters are escaped and nothing is interpreted as markup.
 
 ## Intentionally deferred
 
-* Permanent Codex deletion (`codex delete`). Codex sessions can only be archived natively.
 * Copying the trash across filesystems. Moves are atomic renames on one filesystem, or refused.
 * Running the bridge adapter against legacy, unversioned server installs with no `current` symlink.
 * Native fork for Cursor, which Cursor CLI does not offer.

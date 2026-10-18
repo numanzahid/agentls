@@ -53,20 +53,23 @@ class RemoveScreen(Dialog):
                 Binding("d", "choose('trash')", "Delete", priority=True),
                 Binding("c", "cancel", "Cancel", priority=True)]
 
-    def __init__(self, title: str, note: str = ''):
+    def __init__(self, title: str, note: str = '', native_label: str = 'Delete', permanent: bool = False):
         super().__init__()
         self.title_text = title
         self.note = note
+        self.native_label, self.permanent = native_label, permanent
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="box removal"):
+        with Vertical(classes="box removal" + (" codex-removal" if self.native_label != 'Delete' else '')):
             yield Label(Text(self.title_text), classes="box-title")
-            yield Static(Text("Archive hides chats; Delete removes them from the native list. Both are restorable."))
+            yield Static(Text("Archive hides chats. Permanent deletion is irreversible; a separate warning follows."
+                              if self.permanent else
+                              "Archive hides chats; native removal is restorable."))
             if self.note:
                 yield Static(Text(safe(self.note), style='yellow'))
             with Horizontal(classes="buttons"):
-                yield Button(Text("a Archive"), id="archive")
-                yield Button(Text("d Delete"), id="trash")
+                yield Button(Text("a Archive" if self.native_label == 'Delete' else "a Hide"), id="archive")
+                yield Button(Text("d " + self.native_label), id="trash")
                 yield Button(Text("c Cancel"), id="cancel")
 
     def on_mount(self) -> None:
@@ -209,7 +212,7 @@ class HelpScreen(Dialog):
                        ("Esc", "clear marks (in the list)")]),
         ("Actions", [("Enter / o", "open (resume) in the native CLI"), ("f", "fork (codex, claude)"),
                      ("n", "rename (display alias only)"), ("a", "archive / unarchive (hide; files untouched)"),
-                     ("d / Del", "archive or delete (preflight checked)"),
+                     ("d / Del", "remove: Codex archive; archived Codex → permanently delete (confirm y/n)"),
                      ("t", "trash: restore or purge"), ("y", "copy agent:ID"), ("A", "show/hide archived"),
                      ("Ctrl+S / F2", "settings: close/exec native (default) or suspend and return"),
                      ("q", "quit")]),

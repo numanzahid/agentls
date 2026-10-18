@@ -897,3 +897,143 @@ def test_normal_multi_delete_has_one_confirmation(populated):
         assert len(app.screen_stack) == 1
         assert all(not os.path.exists(target.storage_path) for target in targets)
     drive(scenario)
+
+
+@pytest.mark.parametrize('cancel', ['n', 'escape', 'enter'])
+def test_archived_codex_permanent_modal_cancel(env, cancel):
+    from test_codex_delete import archived, deleted
+    target = archived(env)
+
+    async def scenario(app, pilot):
+        await pilot.press('A')
+        await settle(pilot, app)
+        app._q('#table').move_cursor(row=keys(app).index(target.selector))
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.RemoveScreen)
+        assert 'Permanently delete' in str(app.screen.query_one('#trash').label)
+        assert app.focused.id == 'cancel'
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.DeleteConfirmScreen)
+        assert app.focused.id == 'cancel'
+        assert CODEX_ID in app.screen.body.plain
+        assert 'irreversible' in app.screen.body.plain and 'Descendant' in app.screen.body.plain
+        await pilot.press(cancel)
+        await settle(pilot, app)
+        assert len(app.screen_stack) == 1
+        assert not deleted(env) and os.path.exists(target.storage_path)
+    drive(scenario, size=(100, 30))
+
+
+@pytest.mark.parametrize('confirm', ['y', 'click'])
+def test_archived_codex_permanent_modal_confirm_and_refresh(env, confirm):
+    from test_codex_delete import archived, deleted
+    target = archived(env, indexed=True)
+
+    async def scenario(app, pilot):
+        await pilot.press('A', 'd')
+        await settle(pilot, app)
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.DeleteConfirmScreen)
+        assert not deleted(env)
+        if confirm == 'click':
+            await pilot.click('#confirm')
+        else:
+            await pilot.press('y')
+        await settle(pilot, app)
+        assert deleted(env) == [['delete', '--force', CODEX_ID]]
+        assert not os.path.exists(target.storage_path)
+        assert target.selector not in app.by_key and not app.shown
+    drive(scenario)
+
+
+def test_permanent_delete_native_error_refreshes_without_success(env, monkeypatch):
+    from test_codex_delete import archived
+    target = archived(env)
+    monkeypatch.setenv('FAKE_DELETE_ERROR', 'thread is busy; unsafe references')
+    notifications = []
+    real_notify = SessionBrowser.notify
+
+    def notify(self, message, **kwargs):
+        notifications.append(message)
+        return real_notify(self, message, **kwargs)
+    monkeypatch.setattr(SessionBrowser, 'notify', notify)
+
+    async def scenario(app, pilot):
+        await pilot.press('A', 'd')
+        await settle(pilot, app)
+        await pilot.press('d')
+        await settle(pilot, app)
+        before = app.catalog.refreshed
+        await pilot.press('y')
+        await settle(pilot, app)
+        assert app.catalog.refreshed > before
+        assert target.selector in app.by_key and os.path.exists(target.storage_path)
+        assert any('not confirmed' in n and 'busy' in n for n in notifications)
+        assert not any('Permanently deleted' in n for n in notifications)
+    drive(scenario)
+
+
+def test_permanent_delete_mixed_selection_is_refused(env):
+    from test_codex_delete import archived, deleted
+    target = archived(env)
+    fixtures.codex_session(env.codex, '01a00000-0000-7000-8000-000000000002', env.project)
+    env.age()
+
+    async def scenario(app, pilot):
+        await pilot.press('A')
+        await settle(pilot, app)
+        app.marked = {s.selector for s in app.shown}
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert len(app.screen_stack) == 1
+        assert not deleted(env) and os.path.exists(target.storage_path)
+    drive(scenario)
+
+
+def test_permanent_delete_error_after_native_changes_reconciles(env, monkeypatch):
+    from test_codex_delete import archived
+    target = archived(env, indexed=True)
+    monkeypatch.setenv('FAKE_DELETE_EXIT_AFTER', '1')
+    notifications = []
+    monkeypatch.setattr(SessionBrowser, 'notify', lambda self, message, **kwargs: notifications.append(message))
+
+    async def scenario(app, pilot):
+        await pilot.press('A', 'd')
+        await settle(pilot, app)
+        await pilot.press('d')
+        await settle(pilot, app)
+        await pilot.press('y')
+        await settle(pilot, app)
+        assert target.selector not in app.by_key and not os.path.exists(target.storage_path)
+        assert any('not confirmed' in n for n in notifications)
+        assert not any('Permanently deleted' in n for n in notifications)
+    drive(scenario)
+
+
+@pytest.mark.parametrize('width', [40, 60, 150])
+@pytest.mark.parametrize('native_archived', [False, True])
+def test_codex_removal_labels_fit_narrow_terminal(env, width, native_archived):
+    fixtures.codex_session(env.codex, CODEX_ID, env.project, archived=native_archived)
+    env.age()
+
+    async def scenario(app, pilot):
+        if native_archived:
+            await pilot.press('A')
+        await pilot.press('d')
+        await settle(pilot, app)
+        assert isinstance(app.screen, screens.RemoveScreen)
+        for button in app.screen.query('Button'):
+            assert button.region.width >= len(button.label.plain)
+            assert button.region.right <= width and button.region.bottom <= 20
+        if native_archived:
+            await pilot.press('d')
+            await settle(pilot, app)
+            assert isinstance(app.screen, screens.DeleteConfirmScreen)
+            for button in app.screen.query('Button'):
+                assert button.region.width >= len(button.label.plain)
+                assert button.region.right <= width and button.region.bottom <= 20
+        await pilot.press('escape')
+    drive(scenario, size=(width, 20))

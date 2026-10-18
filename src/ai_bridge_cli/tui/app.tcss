@@ -194,6 +194,23 @@ Screen {
     width: 12;
 }
 
+.codex-removal, .permanent-delete .box {
+    max-width: 100%;
+    padding: 1;
+}
+
+.codex-removal #archive {
+    width: 6;
+}
+
+.codex-removal #cancel {
+    width: 8;
+}
+
+.permanent-delete #cancel {
+    width: 10;
+}
+
 .native-delete .box-body {
     height: 1fr;
 }

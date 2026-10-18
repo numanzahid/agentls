@@ -152,11 +152,55 @@ with log.open("a") as f:
 helps = {{"resume": "Usage: codex resume [OPTIONS] [SESSION_ID]\n --include-non-interactive",
          "fork": "Usage: codex fork [OPTIONS] [SESSION_ID]",
          "archive": "Usage: codex archive [OPTIONS] <SESSION>" if not os.environ.get("FAKE_NO_ARCHIVE") else "nope",
-         "unarchive": "Usage: codex unarchive [OPTIONS] <SESSION>"}}
+         "unarchive": "Usage: codex unarchive [OPTIONS] <SESSION>",
+         "delete": "nope" if os.environ.get("FAKE_NO_DELETE") else "Usage: codex delete [OPTIONS] <SESSION>\n" +
+                   ("" if os.environ.get("FAKE_NO_FORCE") else " --force")}}
 if args[-1:] == ["--help"]:
     print(helps.get(args[0] if len(args) > 1 else "", "codex help"))
     raise SystemExit(0)
 home = pathlib.Path(os.environ["CODEX_HOME"])
+if args and args[0] == "delete":
+    import time, sqlite3, uuid
+    assert args[1] == "--force" and str(uuid.UUID(args[2])) == args[2]
+    if os.environ.get("FAKE_ENV_LOG"):
+        pathlib.Path(os.environ["FAKE_ENV_LOG"]).write_text(json.dumps({{"home": str(home), "stdin": sys.stdin.read()}}))
+    if os.environ.get("FAKE_DELETE_SLEEP"):
+        time.sleep(float(os.environ["FAKE_DELETE_SLEEP"]))
+    if os.environ.get("FAKE_DELETE_FLOOD"):
+        print("x" * 100000, flush=True)
+        raise SystemExit(0)
+    if os.environ.get("FAKE_DELETE_ERROR"):
+        print(os.environ["FAKE_DELETE_ERROR"], file=sys.stderr)
+        raise SystemExit(1)
+    if os.environ.get("FAKE_DELETE_NOOP"):
+        raise SystemExit(0)
+    sid = args[2]
+    rollouts = []
+    for base in (home / "sessions", home / "archived_sessions"):
+        for p in base.rglob("rollout-*.jsonl"):
+            meta = json.loads(p.read_text().splitlines()[0])["payload"]
+            rollouts.append((p, meta))
+    if any(m.get("forked_from_id") == sid for p, m in rollouts):
+        print("unsafe fork references", file=sys.stderr)
+        raise SystemExit(1)
+    ids = {{sid}}
+    while True:
+        expanded = ids | {{m["id"] for p, m in rollouts if m.get("parent_thread_id") in ids}}
+        if expanded == ids:
+            break
+        ids = expanded
+    for p, m in rollouts:
+        if m["id"] in ids:
+            p.unlink()
+    for db in home.glob("state_*.sqlite"):
+        with sqlite3.connect(db) as con:
+            for deleted in ids:
+                if not os.environ.get("FAKE_DELETE_KEEP_INDEX"):
+                    con.execute("DELETE FROM threads WHERE id=?", (deleted,))
+    index = home / "session_index.jsonl"
+    if index.exists():
+        index.write_text("".join(line + "\n" for line in index.read_text().splitlines() if json.loads(line)["id"] not in ids))
+    raise SystemExit(1 if os.environ.get("FAKE_DELETE_EXIT_AFTER") else 0)
 if args and args[0] in ("archive", "unarchive"):
     sid = args[1]
     src, dst = (home / "sessions", home / "archived_sessions") if args[0] == "archive" else \
@@ -166,6 +210,11 @@ if args and args[0] in ("archive", "unarchive"):
         print("not found", file=sys.stderr); raise SystemExit(1)
     dst.mkdir(parents=True, exist_ok=True)
     found[0].rename(dst / found[0].name)
+    for db in home.glob("state_*.sqlite"):
+        import sqlite3
+        with sqlite3.connect(db) as con:
+            con.execute("UPDATE threads SET rollout_path=?, archived=? WHERE id=?",
+                        (str(dst / found[0].name), int(args[0] == "archive"), sid))
     raise SystemExit(0)
 raise SystemExit(0)
 '''

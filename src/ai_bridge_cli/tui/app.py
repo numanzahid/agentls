@@ -24,7 +24,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Input, Select, Static
 
-from .. import native, paths, settings, trash
+from .. import codex_delete, native, paths, settings, trash
 from ..catalog import Catalog, Query
 from ..model import SORT_KEYS, Session
 from ..output import relative
@@ -811,6 +811,14 @@ class SessionBrowser(App):
 
     @work(thread=True, exclusive=True, group="action")
     def prepare_remove(self, sessions: list[Session]) -> None:
+        archived = [s for s in sessions if s.agent == 'codex' and s.native_archived]
+        if archived:
+            if len(sessions) != 1:
+                self.call_from_thread(self.notify, 'Select one natively archived Codex chat for permanent deletion.',
+                                      severity='warning', markup=False)
+                return
+            self.call_from_thread(self._show_permanent_remove, archived[0])
+            return
         try:
             plan = trash.build_plan(sessions)
         except Exception as error:
@@ -829,7 +837,54 @@ class SessionBrowser(App):
                 self._confirm_delete(plan)
 
         note = '\n'.join(dict.fromkeys(warning for item in plan.items for warning in item.warnings))
-        self.push_screen(RemoveScreen(f"Remove {what}?", note=note), chosen)
+        label = 'Native archive' if all(s.agent == 'codex' for s in sessions) else 'Delete'
+        if any(s.agent == 'codex' for s in sessions) and label == 'Delete':
+            note = 'Codex chats use native archive (restorable).\n' + note
+        self.push_screen(RemoveScreen(f"Remove {what}?", note=note, native_label=label), chosen)
+
+    def _show_permanent_remove(self, session: Session) -> None:
+        def chosen(choice):
+            if choice == 'archive':
+                self._set_archived([session], True)
+            elif choice == 'trash':
+                self.prepare_permanent_delete(session)
+        self.push_screen(RemoveScreen(f'Remove “{one_line(session.display_title, 60)}”?',
+                                      native_label='Permanently delete', permanent=True), chosen)
+
+    @work(thread=True, exclusive=True, group='action')
+    def prepare_permanent_delete(self, session: Session) -> None:
+        try:
+            plan = codex_delete.prepare(session)
+        except Exception as error:
+            self.call_from_thread(self.notify, f'Permanent deletion blocked: {one_line(str(error), 600)}',
+                                  severity='error', markup=False, timeout=12)
+            self.call_from_thread(self.refresh_catalog)
+            return
+        self.call_from_thread(self._confirm_permanent_delete, plan)
+
+    def _confirm_permanent_delete(self, plan: codex_delete.PermanentPlan) -> None:
+        body = Text(f'Permanently delete codex:{plan.session.session_id}\n'
+                    f'CODEX_HOME: {safe(str(plan.root))}\n\n'
+                    'This is irreversible. There is no trash restore. Descendant chats (including subagents) '
+                    'may also be removed. Codex checks references and may refuse deletion.\n\n'
+                    'y: Permanently delete   n / Escape: Cancel')
+        screen = DeleteConfirmScreen('Permanently delete archived Codex chat?', body, allowed=True)
+        screen.confirm = Text('[y] Permanently delete')
+        screen.add_class('permanent-delete')
+        self.push_screen(screen, lambda ok: self.run_permanent_delete(plan) if ok else None)
+
+    @work(thread=True, exclusive=True, group='action')
+    def run_permanent_delete(self, plan: codex_delete.PermanentPlan) -> None:
+        try:
+            codex_delete.execute(plan)
+        except Exception as error:
+            self.call_from_thread(self.notify, f'Permanent deletion not confirmed: {one_line(str(error), 600)}',
+                                  severity='error', markup=False, timeout=12)
+        else:
+            self.call_from_thread(self.notify, f'Permanently deleted codex:{plan.session.session_id} with native Codex.',
+                                  markup=False, timeout=12)
+        finally:
+            self.call_from_thread(self.refresh_catalog)
 
     def _confirm_delete(self, plan: trash.DeletePlan) -> None:
         if len(plan.allowed) == len(plan.items):
@@ -871,8 +926,9 @@ class SessionBrowser(App):
         try:
             result = process_delete.execute(stop) if stop else trash.execute(plan)
         except Exception as error:
-            self.call_from_thread(self.notify, f"Nothing deleted: {error}", severity="error", markup=False,
+            self.call_from_thread(self.notify, f"Removal outcome unconfirmed: {error}", severity="error", markup=False,
                                   timeout=12)
+            self.call_from_thread(self.refresh_catalog)
             return
         moved, failed, skipped = len(result["moved"]), result["failed"], result["skipped"]
         message = f"Removed {moved} session(s) (batch {result['batch_id']}); restore with t."

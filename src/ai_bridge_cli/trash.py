@@ -6,8 +6,8 @@ Per agent:
   $AI_BRIDGE_CLI_DATA_DIR/trash/<batch>/ and can be restored.
 * codex: "codex-archive". Rollout files are indexed by Codex's SQLite state, so
   they are never moved or removed by this tool; the installed `codex archive`
-  does it (and `codex unarchive` restores). Permanent Codex deletion is
-  intentionally unsupported.
+  does it (and `codex unarchive` restores). The separate TUI-only permanent
+  deletion flow lives in codex_delete.py.
 
 Safety model
 * Plan: each entry records its identity (dev, inode, type, size, mtime,
@@ -196,7 +196,8 @@ def _check_entry(path: Path, root: Path, required: bool, now: float, trash_dev: 
 
 
 def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_dev: int | None,
-               bridge: BridgeState, jobs: dict, allow_uninspectable: bool) -> Item:
+               bridge: BridgeState, jobs: dict, allow_uninspectable: bool,
+               *, codex_permanent: bool = False) -> Item:
     item = Item(agent=session.agent, session_id=session.session_id, title=session.display_title,
                 method=METHODS[session.agent])
     if not is_uuid(session.session_id):
@@ -237,7 +238,7 @@ def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_d
         entry = _check_entry(path, root, required, now, trash_dev, item.method == "quarantine", item.blockers)
         if entry:
             item.entries.append(entry)
-    if item.method == "codex-archive":
+    if item.method == "codex-archive" and not codex_permanent:
         if session.native_archived:
             item.blockers.append("Already archived by Codex.")
         else:
