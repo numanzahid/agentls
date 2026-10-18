@@ -1,6 +1,5 @@
 """Dependency-free table/detail rendering for headless commands.
 
-Adapted from the MIT-licensed ai-bridge server CLI (ai_bridge/cli_output.py).
 JSON output never passes through here; values are escaped, never modified.
 """
 from __future__ import annotations
@@ -12,7 +11,7 @@ from datetime import datetime
 
 from .textsafe import cell_width, clip, safe, wrap
 
-IDENTITY_KEYS = {"session_id", "selector", "id", "job_id", "task_id", "parent_session_id", "batch_id",
+IDENTITY_KEYS = {"session_id", "selector", "id", "job_id", "parent_session_id", "batch_id",
                  "plan_id", "storage_path"}
 COLORS = {"active": "32", "running": "32", "uncertain": "33", "recent": "33", "lost": "33",
           "cleanup_incomplete": "33", "failed": "31", "mcp": "35", "trashed": "36", "restored": "32"}
@@ -114,23 +113,6 @@ def render_sessions(result: dict, width: int, color: bool) -> list[str]:
     return lines
 
 
-def render_jobs(rows: list[dict], width: int, color: bool) -> list[str]:
-    now = time.time()
-    cells = [[value_text(r.get("job_id")), value_text(r.get("agent")), value_text(r.get("status")),
-              short_id(r.get("session_id")), relative(r.get("started"), now), value_text(r.get("cwd"))]
-             for r in rows]
-    lines = table(["JOB ID", "AGENT", "STATUS", "SESSION", "STARTED", "WORKSPACE"], cells, width, color)
-    lines += list(wrap(f"Bridge agent jobs: {len(rows)}. Status is derived read-only from job records.", width))
-    return lines
-
-
-def render_tasks(rows: list[dict], width: int, color: bool) -> list[str]:
-    now = time.time()
-    cells = [[value_text(r.get("task_id")), relative(r.get("created"), now),
-              value_text(r.get("workspace") or r.get("error"))] for r in rows]
-    return table(["TASK ID", "CREATED", "WORKSPACE"], cells, width, color) + [f"Tasks: {len(rows)}."]
-
-
 def render_plan(plan: dict, width: int, color: bool) -> list[str]:
     lines = [f"Delete preview (plan {plan['plan_id']}): {plan['allowed']} allowed, {plan['blocked']} blocked."]
     for item in plan["items"]:
@@ -162,7 +144,7 @@ def render_batches(rows: list[dict], width: int, color: bool) -> list[str]:
 
 def render(kind: str, result, width: int = 100, color: bool = False) -> str:
     width = max(20, width)
-    renderers = {"sessions": render_sessions, "jobs": render_jobs, "tasks": render_tasks,
+    renderers = {"sessions": render_sessions,
                  "plan": render_plan, "batches": render_batches}
     if kind in renderers:
         lines = renderers[kind](result, width, color)

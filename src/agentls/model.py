@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 ORIGINS = ("mcp", "direct", "unknown")
-# active: verified running bridge job or native process; uncertain: bridge job
+# active: verified running MCP job or native process; uncertain: MCP job
 # whose process cannot be verified; recent: modified moments ago (may be in use).
 STATUSES = ("active", "uncertain", "recent", "idle")
 SORT_KEYS = ("updated", "title", "agent", "project")
@@ -42,7 +42,6 @@ class Session:
     status_note: str | None = None
     active_job_ids: list = field(default_factory=list)
     job_ids: list = field(default_factory=list)
-    task_id: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -67,5 +66,4 @@ class Session:
         row["native_title"] = self.title
         row["title_source"] = "alias" if self.alias else "native"
         # Same field name/semantics as the MCP server's session output.
-        row["bridge_origin"] = "mcp" if self.origin == "mcp" else None
         return row

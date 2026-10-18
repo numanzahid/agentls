@@ -1,6 +1,5 @@
 """Installer transaction: preflight, lock, journaled launchers, venv rollback, faults."""
 import fcntl
-import hashlib
 import json
 import os
 import subprocess
@@ -9,25 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from ai_bridge_cli import installer
+from agentls import installer
 
-MAIN = b"#!/bin/sh\n# pretend ai-bridge server launcher\n"
+OTHER = b"#!/bin/sh\n# another tool's command, e.g. the MCP server's\n"
 SRC = str(Path(__file__).parents[1] / "src")
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path):
     (tmp_path / ".local/bin").mkdir(parents=True)
     os.chmod(tmp_path / ".local/bin", 0o755)
-    target = tmp_path / ".local/bin/ai-bridge"
-    target.write_bytes(MAIN)
-    os.chmod(target, 0o755)
-    digest = hashlib.sha256(MAIN).hexdigest()
-    rec = tmp_path / ".local/share/ai-bridge/.cli-launcher.json"
-    rec.parent.mkdir(parents=True)
-    rec.write_text(json.dumps({"schema": 1, "uid": os.geteuid(), "path": str(target), "sha256": digest}))
-    os.chmod(rec, 0o600)
-    monkeypatch.setattr(installer, "KNOWN_MAIN_LAUNCHERS", {digest})
+    other = tmp_path / ".local/bin/ai-bridge"
+    other.write_bytes(OTHER)
+    os.chmod(other, 0o755)
     return tmp_path
 
 
@@ -36,7 +29,7 @@ def layout(home):
 
 
 def record(home):
-    path = home / ".local/share/ai-bridge-cli/launchers.json"
+    path = home / ".local/share/agentls/launchers.json"
     return json.loads(path.read_text()) if path.exists() else {"launchers": {}, "pending": {}}
 
 
@@ -52,7 +45,7 @@ def fault_at(point, nth=1):
 
 
 def stage(home, marker="new"):
-    data = home / ".local/share/ai-bridge-cli"
+    data = home / ".local/share/agentls"
     data.mkdir(parents=True, exist_ok=True)
     os.chmod(data, 0o700)
     path = data / f"venv.staging-{marker}"
@@ -64,27 +57,25 @@ def stage(home, marker="new"):
     return path
 
 
-@pytest.mark.parametrize("point,nth", [("before_publish", 1), ("before_publish", 2),
-                                       ("after_publish", 1), ("after_publish", 2)])
-def test_launcher_failures_roll_back_completely(home, monkeypatch, point, nth):
-    monkeypatch.setattr(installer, "_fault", fault_at(point, nth))
+@pytest.mark.parametrize("point", ["before_publish", "after_publish"])
+def test_launcher_failures_roll_back_completely(home, monkeypatch, point):
+    monkeypatch.setattr(installer, "_fault", fault_at(point))
     with pytest.raises(RuntimeError):
         installer.install(layout(home), Path(sys.executable), os.geteuid())
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN
-    assert not (home / ".local/bin/ai-bridge-cli").exists()
+    assert (home / ".local/bin/ai-bridge").read_bytes() == OTHER
+    assert not (home / ".local/bin/agentls").exists()
     rec = record(home)
     assert rec["launchers"] == {} and rec["pending"] == {}
-    assert installer.status(layout(home), os.geteuid())["ai-bridge"]["state"] == "main"
+    assert installer.status(layout(home), os.geteuid())["agentls"]["state"] == "absent"
 
 
 CRASH = r"""
 import os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from ai_bridge_cli import installer
-installer.KNOWN_MAIN_LAUNCHERS = {sys.argv[3]}
+from agentls import installer
 def fault(p):
-    if p == sys.argv[4]:
+    if p == sys.argv[3]:
         os._exit(9)
 installer._fault = fault
 installer.install(installer.Layout(Path(sys.argv[2])), Path(sys.executable), os.geteuid())
@@ -93,51 +84,32 @@ installer.install(installer.Layout(Path(sys.argv[2])), Path(sys.executable), os.
 
 @pytest.mark.parametrize("point", ["before_publish", "after_publish"])
 def test_crash_between_journal_and_commit_is_recovered(home, point):
-    digest = hashlib.sha256(MAIN).hexdigest()
-    proc = subprocess.run([sys.executable, "-c", CRASH, SRC, str(home), digest, point], capture_output=True,
-                          text=True)
+    proc = subprocess.run([sys.executable, "-c", CRASH, SRC, str(home), point], capture_output=True, text=True)
     assert proc.returncode == 9, proc.stderr
     assert record(home)["pending"]                      # journal survived the crash
     report = installer.install(layout(home), Path(sys.executable), os.geteuid())  # rerun completes
     rec = record(home)
-    assert rec["pending"] == {} and len(rec["launchers"]) == 2
-    assert installer.MARKER.encode() in (home / ".local/bin/ai-bridge-cli").read_bytes()
-    assert str(home / ".local/bin/ai-bridge-cli") in report["installed"] + report["unchanged"]
-    assert installer.rollback(layout(home), os.geteuid())["restored"] == str(home / ".local/bin/ai-bridge")
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN  # original server bytes, from the backup
-
-
-def test_interrupted_rollback_never_marks_server_launcher_ours(home):
-    installer.install(layout(home), Path(sys.executable), os.geteuid())
-    rec = record(home)
-    target = str(home / ".local/bin/ai-bridge")
-    # Simulate: rollback journaled and published the server bytes, then crashed.
-    (home / ".local/bin/ai-bridge").write_bytes(MAIN)
-    rec["pending"][target] = {"new": hashlib.sha256(MAIN).hexdigest(), "old": rec["launchers"][target],
-                              "restore": True}
-    installer.save_record(layout(home), rec)
-    assert installer.status(layout(home), os.geteuid())["ai-bridge"]["state"] == "main"
-    report = installer.uninstall(layout(home), os.geteuid())
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN    # not removed as "ours"
-    assert str(home / ".local/bin/ai-bridge-cli") in report["removed"]
+    assert rec["pending"] == {} and len(rec["launchers"]) == 1
+    assert installer.MARKER.encode() in (home / ".local/bin/agentls").read_bytes()
+    assert str(home / ".local/bin/agentls") in report["installed"] + report["unchanged"]
+    assert (home / ".local/bin/ai-bridge").read_bytes() == OTHER
 
 
 def test_activate_swaps_venv_and_installs(home):
-    data = home / ".local/share/ai-bridge-cli"
+    data = home / ".local/share/agentls"
     old = stage(home, "old")
     old.rename(data / "venv")
     report = installer.activate(layout(home), stage(home, "new"), os.geteuid())
     assert (data / "venv/MARKER").read_text() == "new" and (data / "venv.previous/MARKER").read_text() == "old"
-    assert report["replaced_server_launcher"] and str(data / "venv/bin/python") in \
-        (home / ".local/bin/ai-bridge-cli").read_text()
-    result = installer.rollback(layout(home), os.geteuid(), venv=True)
-    assert result["restored"] and (data / "venv/MARKER").read_text() == "old"
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN
+    assert report["installed"] and str(data / "venv/bin/python") in (home / ".local/bin/agentls").read_text()
+    result = installer.rollback(layout(home), os.geteuid())
+    assert result["restored_venv"] and (data / "venv/MARKER").read_text() == "old"
+    assert (home / ".local/bin/ai-bridge").read_bytes() == OTHER
 
 
 @pytest.mark.parametrize("point", ["after_venv_swap", "before_publish", "after_publish"])
 def test_activate_failure_restores_previous_venv_and_launchers(home, monkeypatch, point):
-    data = home / ".local/share/ai-bridge-cli"
+    data = home / ".local/share/agentls"
     stage(home, "old").rename(data / "venv")
     stage(home, "older").rename(data / "venv.previous")
     monkeypatch.setattr(installer, "_fault", fault_at(point))
@@ -146,17 +118,17 @@ def test_activate_failure_restores_previous_venv_and_launchers(home, monkeypatch
     assert (data / "venv/MARKER").read_text() == "old"
     assert (data / "venv.previous/MARKER").read_text() == "older"
     assert not list(data.glob("venv.failed-*")) and not list(data.glob("venv.discard-*"))
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN
-    assert not (home / ".local/bin/ai-bridge-cli").exists()
+    assert (home / ".local/bin/ai-bridge").read_bytes() == OTHER
+    assert not (home / ".local/bin/agentls").exists()
 
 
 def test_activate_preflight_refuses_before_touching_anything(home):
-    foreign = home / ".local/bin/ai-bridge-cli"
+    foreign = home / ".local/bin/agentls"
     foreign.write_text("#!/bin/sh\necho someone else\n")
     staged = stage(home)
     with pytest.raises(installer.Refusal, match="not ours"):
         installer.activate(layout(home), staged, os.geteuid())
-    assert staged.exists() and not (home / ".local/share/ai-bridge-cli/venv").exists()
+    assert staged.exists() and not (home / ".local/share/agentls/venv").exists()
     assert foreign.read_text().endswith("someone else\n")
 
 
@@ -165,12 +137,12 @@ def test_activate_refuses_broken_stage(home):
     (staged / "bin/python").write_text("#!/bin/sh\nexit 3\n")
     with pytest.raises(installer.Refusal):
         installer.activate(layout(home), staged, os.geteuid())
-    assert not (home / ".local/share/ai-bridge-cli/venv").exists()
+    assert not (home / ".local/share/agentls/venv").exists()
 
 
 def test_concurrent_install_is_refused(home):
     staged = stage(home)
-    lock = home / ".local/share/ai-bridge-cli/.install.lock"
+    lock = home / ".local/share/agentls/.install.lock"
     fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -190,7 +162,7 @@ def test_stage_must_be_ours(home, tmp_path):
 def test_preflight_and_dry_run_write_nothing(home):
     before = sorted(str(p) for p in home.rglob("*"))
     report, _ = installer.plan_launchers(layout(home), home / "x/bin/python", os.geteuid())
-    assert report["replaced_server_launcher"]
+    assert report["installed"]
     assert sorted(str(p) for p in home.rglob("*")) == before
 
 
@@ -198,10 +170,10 @@ def test_repeat_venv_rollback_is_noop(home):
     data = layout(home).data
     stage(home, "old").rename(data / "venv")
     installer.activate(layout(home), stage(home), os.geteuid())
-    installer.rollback(layout(home), os.geteuid(), venv=True)
+    installer.rollback(layout(home), os.geteuid())
     before = sorted(str(p.relative_to(home)) for p in home.rglob("*"))
     for dry_run in (True, False, False):
-        result = installer.rollback(layout(home), os.geteuid(), dry_run=dry_run, venv=True)
+        result = installer.rollback(layout(home), os.geteuid(), dry_run=dry_run)
         assert not result.get("restored_venv") and not result.get("would_restore_venv")
         assert (data / "venv/MARKER").read_text() == "old"
     assert sorted(str(p.relative_to(home)) for p in home.rglob("*")) == before
@@ -229,24 +201,23 @@ ACTIVATE_CRASH = r"""
 import os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from ai_bridge_cli import installer
-installer.KNOWN_MAIN_LAUNCHERS = {sys.argv[3]}
+from agentls import installer
 installer._run_version = lambda p: None
 def fault(p):
-    if p == sys.argv[4]:
+    if p == sys.argv[3]:
         os._exit(9)
 installer._fault = fault
 layout = installer.Layout(Path(sys.argv[2]))
-if sys.argv[5] == "rollback":
-    installer.rollback(layout, os.geteuid(), venv=True)
+if sys.argv[4] == "rollback":
+    installer.rollback(layout, os.geteuid())
 else:
     installer.activate(layout, layout.data / "venv.staging-new", os.geteuid())
 """
 
 
 def crash_venv(home, point, operation="activate"):
-    proc = subprocess.run([sys.executable, "-c", ACTIVATE_CRASH, SRC, str(home),
-                           hashlib.sha256(MAIN).hexdigest(), point, operation], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, "-c", ACTIVATE_CRASH, SRC, str(home), point, operation],
+                          capture_output=True, text=True)
     assert proc.returncode == 9, proc.stderr
 
 
@@ -277,10 +248,10 @@ def test_killed_rollback_is_retryable_and_idempotent(home, point):
     installer.activate(layout(home), stage(home), os.geteuid())
     crash_venv(home, point, "rollback")
     for _ in range(2):
-        installer.rollback(layout(home), os.geteuid(), venv=True)
+        installer.rollback(layout(home), os.geteuid())
         assert (data / "venv/MARKER").read_text() == "old"
         assert not (data / "venv.previous").exists()
-    assert (home / ".local/bin/ai-bridge").read_bytes() == MAIN
+    assert (home / ".local/bin/ai-bridge").read_bytes() == OTHER
 
 
 def test_legacy_missing_active_preserves_last_good_venv(home, monkeypatch):
@@ -311,7 +282,7 @@ def test_venv_symlinks_are_refused_without_touching_target(home, slot, dangling)
         installer.activate(layout(home), staged, os.geteuid())
     if slot != "venv.staging-new":
         with pytest.raises(installer.Refusal, match="real directory"):
-            installer.rollback(layout(home), os.geteuid(), venv=True)
+            installer.rollback(layout(home), os.geteuid())
     assert path.is_symlink()
     if not dangling:
         assert (target / "KEEP").read_text() == "untouched"
@@ -383,14 +354,14 @@ def test_invalid_venv_journal_refuses_without_changes(home, journal):
     assert current.venv_journal.exists()
 
 
-def test_rollback_without_active_venv_and_without_server_backup(home):
+def test_rollback_without_active_venv(home):
     current = layout(home)
     stage(home, "old").rename(current.previous)
-    result = installer.rollback(current, os.geteuid(), dry_run=True, venv=True)
+    result = installer.rollback(current, os.geteuid(), dry_run=True)
     assert result["would_restore_venv"] == str(current.previous)
     assert current.previous.exists() and not current.venv.exists()
-    installer.rollback(current, os.geteuid(), venv=True)
-    installer.rollback(current, os.geteuid(), venv=True)
+    installer.rollback(current, os.geteuid())
+    installer.rollback(current, os.geteuid())
     assert (current.venv / "MARKER").read_text() == "old"
     assert not current.previous.exists()
 

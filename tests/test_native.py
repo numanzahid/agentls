@@ -4,9 +4,9 @@ from dataclasses import replace
 import pytest
 from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli import native, paths
-from ai_bridge_cli.activity import Activity
-from ai_bridge_cli.catalog import Catalog
+from agentls import native, paths
+from agentls.activity import Activity
+from agentls.catalog import Catalog
 
 
 def get(agent, sid):
@@ -29,7 +29,7 @@ def test_codex_resume_includes_noninteractive_flag(populated):
 
 def test_cursor_requires_default_home(populated, monkeypatch):
     s = get("cursor", CURSOR_ID)
-    with pytest.raises(native.PreflightError, match="AI_BRIDGE_CURSOR_HOME"):
+    with pytest.raises(native.PreflightError, match="AGENTLS_CURSOR_HOME"):
         native.plan(s, "open", Activity())
     monkeypatch.setattr(paths, "cursor_home_is_default", lambda: True)
     assert native.plan(s, "open", Activity()).argv[1:] == ["--resume", CURSOR_ID]
@@ -64,7 +64,7 @@ def test_missing_binary(populated, monkeypatch):
         native.plan(get("claude", CLAUDE_ID), "open", Activity())
 
 
-def test_native_env_strips_bridge_settings(monkeypatch):
+def test_native_env_strips_own_and_mcp_settings(monkeypatch):
     monkeypatch.setenv("AI_BRIDGE_TOKEN", "secret")
     monkeypatch.setenv("CODEX_HOME", "/x")
     env = native.native_env()
@@ -86,7 +86,7 @@ def test_exec_handoff_preserves_pid_cwd_argv_and_environment(populated):
                       "'secret': os.environ.get('AI_BRIDGE_TOKEN')}, stream)\n")
     script.chmod(0o700)
     plan = native.plan(get("claude", CLAUDE_ID), "open", Activity())
-    code = ("import os; from ai_bridge_cli.native import LaunchPlan, exec_; "
+    code = ("import os; from agentls.native import LaunchPlan, exec_; "
             f"plan = LaunchPlan(**{dict(plan.__dict__, argv=[str(script), '--resume', CLAUDE_ID])!r}); "
             "exec_(plan)")
     child = subprocess.Popen([sys.executable, "-c", code],

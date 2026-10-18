@@ -10,10 +10,10 @@ import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID, REAL_SNAPSHOT
 
-from ai_bridge_cli import activity, fsutil, trash
-from ai_bridge_cli.activity import Activity
-from ai_bridge_cli.catalog import Catalog
-from ai_bridge_cli.scanners import Scanner
+from agentls import activity, fsutil, trash
+from agentls.activity import Activity
+from agentls.catalog import Catalog
+from agentls.scanners import Scanner
 
 SRC = str(Path(__file__).parents[1] / "src")
 
@@ -124,8 +124,8 @@ def test_oversized_tree_is_refused(populated, monkeypatch):
 CRASH = r"""
 import os, sys
 sys.path.insert(0, sys.argv[1])
-from ai_bridge_cli import activity, trash
-from ai_bridge_cli.catalog import Catalog
+from agentls import activity, trash
+from agentls.catalog import Catalog
 activity.snapshot = lambda: activity.Activity()
 point, count = sys.argv[2], int(sys.argv[3])
 seen = []
@@ -235,7 +235,7 @@ def test_purge_refuses_unresolved_lost_objects(populated):
     assert (populated.cli_data / "trash" / result["batch_id"]).exists()
 
 
-# -- (3) fail closed on uninspectable processes / bridge state ----------------------
+# -- (3) fail closed on uninspectable processes / MCP state ----------------------
 
 def test_missing_proc_is_incomplete(monkeypatch, tmp_path):
     monkeypatch.setattr(activity, "PROC", tmp_path / "noproc")
@@ -273,7 +273,7 @@ def test_execute_refuses_when_inspection_becomes_incomplete(populated, monkeypat
     assert Path(session.storage_path).exists()
 
 
-def test_unreadable_bridge_job_blocks_deletion(populated):
+def test_unreadable_mcp_job_blocks_deletion(populated):
     jobs = populated.state / "jobs"
     jobs.mkdir(parents=True)
     (jobs / "1018-000001-aaaaaa.json").write_text("{not json")
@@ -298,8 +298,8 @@ def test_unlistable_jobs_dir_is_a_problem(populated):
     jobs.mkdir(parents=True)
     os.chmod(jobs, 0o000)
     try:
-        from ai_bridge_cli.bridge import BridgeState
-        state = BridgeState()
+        from agentls.mcp import McpState
+        state = McpState()
         state.jobs()
         assert state.problems
     finally:
@@ -383,7 +383,7 @@ def test_fifos_named_like_sessions_do_not_hang(env):
 
 
 def test_history_reader_rejects_fifo_and_symlink(tmp_path):
-    from ai_bridge_cli.scanners.common import iter_jsonl
+    from agentls.scanners.common import iter_jsonl
     os.mkfifo(tmp_path / "f.jsonl")
     with pytest.raises(fsutil.UnsafePath):
         run_with_timeout(lambda: list(iter_jsonl(tmp_path / "f.jsonl")))
@@ -394,7 +394,7 @@ def test_history_reader_rejects_fifo_and_symlink(tmp_path):
 
 
 def test_reads_are_bounded(tmp_path):
-    from ai_bridge_cli.scanners import common
+    from agentls.scanners import common
     path = tmp_path / "big.jsonl"
     with open(path, "wb") as stream:
         stream.write(b'{"x": "' + b"a" * (common.MAX_LINE + 10) + b'"}\n')
@@ -409,7 +409,7 @@ def test_one_broken_session_does_not_hide_its_agent(env, monkeypatch):
     fixtures.claude_session(env.claude, CLAUDE_ID, env.project)
     other = "33333333-2222-4333-8444-555555555555"
     fixtures.claude_session(env.claude, other, env.project, sidecar=False)
-    from ai_bridge_cli.scanners import claude
+    from agentls.scanners import claude
     real = claude.parse
     monkeypatch.setattr(claude, "parse", lambda path, root, info: (
         (_ for _ in ()).throw(RuntimeError("hostile")) if path.stem == other else real(path, root, info)))

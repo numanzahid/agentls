@@ -98,7 +98,7 @@ def pb(number: int, value) -> bytes:
 
 def cursor_session(root: Path, sid: str, project: Path, name: str = "Fixture chat",
                    subagent: bool = False, model: str | None = None) -> Path:
-    """Same layout and protobuf graph as Cursor CLI (adapted from ai-bridge tests)."""
+    """Same layout and protobuf graph as Cursor CLI."""
     db = root / "chats" / hashlib.md5(str(project).encode()).hexdigest() / sid / "store.db"
     db.parent.mkdir(parents=True)
     con = sqlite3.connect(db)

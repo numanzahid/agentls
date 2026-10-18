@@ -14,8 +14,7 @@ is changed. Headless `sessions delete` only does recoverable removal.
 
 ## Archive
 
-Aliases and archive flags are stored in `~/.local/state/ai-bridge-cli/overlays.json`. Flags
-written by older ai-bridge CLIs in the server's state directory are still read, never written.
+Aliases and archive flags are stored in `~/.local/state/agentls/overlays.json`.
 
 ## Delete (trash)
 
@@ -25,13 +24,13 @@ written by older ai-bridge CLIs in the server's state directory are still read, 
 | Cursor CLI | the chat folder (`store.db` + WAL/SHM) and `agent-transcripts/<id>` | `trash restore` |
 | Codex | nothing moved by this tool; runs the installed `codex archive <UUID>` | `codex unarchive` via `trash restore` |
 
-Trash lives in `~/.local/share/ai-bridge-cli/trash/<batch>/`. `trash purge BATCH --yes`
+Trash lives in `~/.local/share/agentls/trash/<batch>/`. `trash purge BATCH --yes`
 permanently removes one fully resolved batch.
 
 **Refused when:**
 
 * the session is active, uncertain or recent, or anything in it changed in the last 2 minutes;
-* a bridge job record is unreadable, or an unfinished same-agent job has no known session yet;
+* an MCP job record is unreadable, or an unfinished same-agent MCP job has no known session yet;
 * process inspection is incomplete (for example a non-dumpable `codex` process whose open files
   cannot be listed); see below;
 * a path is a symlink, hard link, special file, not yours, outside the store, or under a
@@ -57,10 +56,8 @@ the plan ID, never used by the TUI, and does not bypass any other check.
 
 Keeps chat files.
 
-* **Bridge jobs** are stopped through the installed server's `agents.stop`, after verifying the
-  job's private records and saved process identities. A second confirmation lists the jobs and
-  their background processes and authorizes server cleanup, which may include SIGKILL. A
-  cancellation request alone is not reported as stopped.
+* **MCP jobs** are not stopped here: a session with an unfinished ai-bridge MCP job is refused.
+  Stop the job through the MCP server, then refresh.
 * **Native processes** are stopped only when exclusively identified: the user's own native
   executable running exactly `codex resume UUID`, `claude --resume UUID` or
   `agent`/`cursor-agent --resume UUID`, with matching start time and session file. Wrapped commands,

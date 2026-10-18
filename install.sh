@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Install or update ai-bridge-cli for the current user, in its own virtualenv.
+# Install or update agentls for the current user, in its own virtualenv.
 #
-#   bash install.sh [--dry-run] [--no-replace-ai-bridge] [--accept-main-record] [--python PY]
-#   bash install.sh --rollback     restore the ai-bridge server's original `ai-bridge` launcher
-#                                  and swap back the previous ai-bridge-cli virtualenv (if any)
-#   bash install.sh --uninstall    remove ai-bridge-cli launchers + virtualenvs (restores the
-#                                  server launcher if it was replaced; trash, backups, state kept)
-#   bash install.sh --status       show what owns ~/.local/bin/ai-bridge{,-cli}
+#   bash install.sh [--dry-run] [--python PY]
+#   bash install.sh --rollback     swap back the previous agentls virtualenv (if any)
+#   bash install.sh --uninstall    remove the agentls launcher and virtualenvs (trash, settings,
+#                                  aliases kept)
+#   bash install.sh --status       show what owns ~/.local/bin/agentls
 #
-# Never uses sudo, never pip-installs globally, never touches the ai-bridge MCP
-# service, its releases (~/.local/share/ai-bridge) or its state directory.
+# Never uses sudo, never pip-installs globally, and only writes to its own paths.
 set -euo pipefail
 umask 022
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALLER="$SRC_DIR/src/ai_bridge_cli/installer.py"
+INSTALLER="$SRC_DIR/src/agentls/installer.py"
 CONSTRAINTS="$SRC_DIR/constraints.txt"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -27,12 +25,11 @@ LAUNCHER_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; LAUNCHER_ARGS+=(--dry-run) ;;
-    --no-replace-ai-bridge|--accept-main-record) LAUNCHER_ARGS+=("$1") ;;
     --python) [ $# -ge 2 ] || die "--python needs a path"; PY="$2"; shift ;;
     --rollback) MODE=rollback ;;
     --uninstall) MODE=uninstall ;;
     --status) MODE=status ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
   shift
@@ -44,7 +41,7 @@ PW_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
 # Match Layout: never stage through a HOME alias with a different lexical path.
 CANONICAL_HOME="$(realpath -e "$PW_HOME")" || die "Cannot resolve passwd home."
 [ -d "$CANONICAL_HOME" ] || die "Passwd home must be a directory."
-DATA_DIR="$CANONICAL_HOME/.local/share/ai-bridge-cli"
+DATA_DIR="$CANONICAL_HOME/.local/share/agentls"
 VENV="$DATA_DIR/venv"
 
 find_python() {
@@ -69,7 +66,7 @@ case "$MODE" in
   uninstall) launchers uninstall ${LAUNCHER_ARGS[@]+"${LAUNCHER_ARGS[@]}"}; exit 0 ;;
 esac
 
-[ -f "$SRC_DIR/pyproject.toml" ] && [ -f "$INSTALLER" ] || die "Run install.sh from the ai-bridge-cli source tree."
+[ -f "$SRC_DIR/pyproject.toml" ] && [ -f "$INSTALLER" ] || die "Run install.sh from the agentls source tree."
 
 # Read-only preflight first: refuse before building anything if the launchers
 # could not be installed safely.
@@ -96,7 +93,7 @@ trap cleanup EXIT
 
 # Reusable build tools (pip, setuptools, wheel), kept in the cache so updates skip
 # creating a pip and an isolated build environment each time. Safe to delete.
-TOOLS="$CANONICAL_HOME/.cache/ai-bridge-cli/build-venv"
+TOOLS="$CANONICAL_HOME/.cache/agentls/build-venv"
 PIP=("$TOOLS/bin/python" -I -m pip --disable-pip-version-check --no-input -q)
 tools_ok() {
   [ -x "$TOOLS/bin/python" ] &&
@@ -118,20 +115,19 @@ say "Creating virtualenv with $("$PY" -V 2>&1)"
 mkdir "$BUILD/src" "$BUILD/dist"
 tar -C "$SRC_DIR" --exclude=.git --exclude=.venv --exclude='*.egg-info' --exclude=__pycache__ \
     --exclude=build --exclude=dist -cf - . | tar -C "$BUILD/src" -xf -
-say "Installing ai-bridge-cli and pinned dependencies into the staging virtualenv"
+say "Installing agentls and pinned dependencies into the staging virtualenv"
 "${PIP[@]}" wheel --no-deps --no-build-isolation -w "$BUILD/dist" "$BUILD/src"
 "${PIP[@]}" --python "$STAGE/bin/python" install --no-compile -c "$CONSTRAINTS" "$BUILD"/dist/*.whl
 
-# Named interpreter links, so the running process shows as ai-bridge (tmux, ps).
+# Named interpreter link, so the running process shows as agentls (tmux, ps).
 mkdir "$STAGE/libexec"
-ln -s ../bin/python "$STAGE/libexec/ai-bridge"
-ln -s ../bin/python "$STAGE/libexec/ai-bridge-cli"
+ln -s ../bin/python "$STAGE/libexec/agentls"
 
 say "Smoke test (staging)"
-"$STAGE/bin/python" -I -m ai_bridge_cli --version
-"$STAGE/libexec/ai-bridge" -I -m ai_bridge_cli --version >/dev/null || die "Named interpreter link failed; nothing was changed."
-"$STAGE/bin/python" -I -c 'import ai_bridge_cli.tui.app' || die "TUI import failed; nothing was changed."
-"$STAGE/bin/python" -I -m ai_bridge_cli sessions list --limit 1 --json >/dev/null \
+"$STAGE/bin/python" -I -m agentls --version
+"$STAGE/libexec/agentls" -I -m agentls --version >/dev/null || die "Named interpreter link failed; nothing was changed."
+"$STAGE/bin/python" -I -c 'import agentls.tui.app' || die "TUI import failed; nothing was changed."
+"$STAGE/bin/python" -I -m agentls sessions list --limit 1 --json >/dev/null \
   || die "Headless listing failed; nothing was changed."
 
 # One locked transaction: preflight again, swap venv (previous kept), verify,
@@ -143,4 +139,4 @@ case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
   *) echo "NOTE: add ~/.local/bin to PATH, e.g.: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc" ;;
 esac
-say "Done. Run: ai-bridge   (or ai-bridge-cli). The ai-bridge MCP service was not touched."
+say "Done. Run: agentls"

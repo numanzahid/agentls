@@ -27,8 +27,8 @@ def test_real_terminal_confirmation_exec_and_restoration(populated):
     agent.chmod(0o700)
     code = f'''
 from pathlib import Path
-from ai_bridge_cli import activity
-from ai_bridge_cli.tui import app
+from agentls import activity
+from agentls.tui import app
 activity.snapshot = lambda: activity.Activity()
 Original = app.SessionBrowser
 class AutomatedBrowser(Original):
@@ -57,7 +57,7 @@ raise SystemExit(app.run())
     driver.write_text(code)
     child = subprocess.Popen([sys.executable, str(driver)], stdin=slave, stdout=slave, stderr=slave,
                              env={**os.environ, "TERM": "xterm-256color",
-                                  "AI_BRIDGE_CLAUDE_BIN": str(agent)})
+                                  "AGENTLS_CLAUDE_BIN": str(agent)})
     output = bytearray()
 
     def until(predicate):
@@ -102,7 +102,7 @@ def test_real_terminal_delete_uses_single_confirmation(populated):
     """Send actual terminal bytes through Textual's modal binding/focus handling."""
     from pathlib import Path
 
-    from ai_bridge_cli.catalog import Catalog
+    from agentls.catalog import Catalog
 
     target = Catalog().refresh(probe_activity=False).get('claude', CLAUDE_ID)
     ready = populated.root / 'delete-browser-ready'
@@ -110,8 +110,8 @@ def test_real_terminal_delete_uses_single_confirmation(populated):
     returned = populated.root / 'delete-cancelled'
     code = f'''
 from pathlib import Path
-from ai_bridge_cli import activity
-from ai_bridge_cli.tui import app, screens
+from agentls import activity
+from agentls.tui import app, screens
 activity.snapshot = lambda: activity.Activity()
 class Browser(app.SessionBrowser):
     CSS_PATH = str(Path(app.__file__).with_name('app.tcss'))

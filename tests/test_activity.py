@@ -6,7 +6,7 @@ import sys
 import time
 import uuid
 
-from ai_bridge_cli import activity
+from agentls import activity
 
 HOLD = "import sys, time; f = open(sys.argv[1]); print('ready', flush=True); time.sleep(30)"
 

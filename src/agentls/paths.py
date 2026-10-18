@@ -1,8 +1,9 @@
 """Every on-disk location, resolved from the environment at call time.
 
 Native stores honour the variables their own CLIs use (CLAUDE_CONFIG_DIR,
-CODEX_HOME). Bridge state is read from AI_BRIDGE_STATE_DIR. This tool's own
-writable data never lives inside a native store or the bridge state directory.
+CODEX_HOME). The ai-bridge MCP server's state is read (never written) from its own
+AI_BRIDGE_STATE_DIR. This tool's writable data never lives inside a native store or
+the MCP server's directories.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ def codex_dir() -> Path:
 
 
 def cursor_home() -> Path:
-    return _env_path("AI_BRIDGE_CURSOR_HOME", home() / ".cursor")
+    return _env_path("AGENTLS_CURSOR_HOME", home() / ".cursor")
 
 
 def cursor_home_is_default() -> bool:
@@ -43,33 +44,29 @@ def agent_root(agent: str) -> Path:
     return {"claude": claude_dir, "codex": codex_dir, "cursor": cursor_home}[agent]()
 
 
-def bridge_state_dir() -> Path:
-    """Main MCP server state (read-only from this tool's point of view)."""
+def mcp_state_dir() -> Path:
+    """ai-bridge MCP server state: job and provenance records (read-only here)."""
     return _env_path("AI_BRIDGE_STATE_DIR", home() / ".local/state/ai-bridge")
 
 
-def bridge_tasks_dir() -> Path:
-    return _env_path("AI_BRIDGE_TASKS_DIR", home() / ".ai-bridge-tasks")
-
-
-def bridge_install_root() -> Path:
-    """Main server's versioned release root (current -> releases/<id>)."""
-    return _env_path("AI_BRIDGE_CLI_BRIDGE_ROOT", home() / ".local/share/ai-bridge")
+def mcp_install_root() -> Path:
+    """ai-bridge MCP server install root; its absence proves no session came through MCP."""
+    return _env_path("AGENTLS_MCP_ROOT", home() / ".local/share/ai-bridge")
 
 
 def cli_state_dir() -> Path:
     """Aliases/archive flags written by this tool."""
-    return _env_path("AI_BRIDGE_CLI_STATE_DIR", home() / ".local/state/ai-bridge-cli")
+    return _env_path("AGENTLS_STATE_DIR", home() / ".local/state/agentls")
 
 
 def cli_config_dir() -> Path:
     """Standalone CLI preferences (never the MCP server's configuration)."""
-    return _env_path("XDG_CONFIG_HOME", home() / ".config") / "ai-bridge-cli"
+    return _env_path("XDG_CONFIG_HOME", home() / ".config") / "agentls"
 
 
 def cli_data_dir() -> Path:
     """Install root and quarantine (trash) for natively deleted sessions."""
-    return _env_path("AI_BRIDGE_CLI_DATA_DIR", home() / ".local/share/ai-bridge-cli")
+    return _env_path("AGENTLS_DATA_DIR", home() / ".local/share/agentls")
 
 
 def trash_dir() -> Path:

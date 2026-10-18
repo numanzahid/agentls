@@ -8,11 +8,10 @@ from pathlib import Path
 import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
-from test_bridge import make_release
 
-from ai_bridge_cli import activity, bridge, codex_delete, session_actions as actions
-from ai_bridge_cli.catalog import Catalog
-from ai_bridge_cli.fsutil import UnsafePath
+from agentls import activity, codex_delete, mcp, session_actions as actions
+from agentls.catalog import Catalog
+from agentls.fsutil import UnsafePath
 
 pytest_plugins = ["test_process_delete"]
 
@@ -224,7 +223,7 @@ def test_process_identity_change_after_pidfd_never_signals(process, monkeypatch)
 
 @pytest.mark.parametrize("agent,sid", [("claude", CLAUDE_ID), ("cursor", CURSOR_ID)])
 def test_force_quarantine_is_recoverable(populated, agent, sid):
-    from ai_bridge_cli import trash
+    from agentls import trash
 
     row = selected(agent, sid)
     plan = actions.prepare_quarantine([row])
@@ -256,13 +255,13 @@ def fake_stat(proc, pid, start="123", state="S"):
     (base / "cmdline").write_bytes(b"fixture-runner\0")
 
 
-def bridge_job(env, monkeypatch, status="cleanup_incomplete"):
+def mcp_job(env, monkeypatch, status="cleanup_incomplete"):
     proc = env.root / "proc"
     proc.mkdir()
-    monkeypatch.setattr(bridge, "PROC", proc)
+    monkeypatch.setattr(mcp, "PROC", proc)
     monkeypatch.setattr(activity, "PROC", proc)
     monkeypatch.setattr(activity, "_ancestors", lambda: set())
-    ident = {"boot_id": bridge.BOOT_ID, "start_ticks": "123", "pgid": 10}
+    ident = {"boot_id": mcp.BOOT_ID, "start_ticks": "123", "pgid": 10}
     job = {
         "id": "1018-000001-abcdef",
         "kind": "agent",
@@ -285,21 +284,21 @@ def bridge_job(env, monkeypatch, status="cleanup_incomplete"):
         json.dumps({"pid": 4002, "identity": ident, "descendants": {"4003": ident}})
     )
     side.chmod(0o600)
-    return bridge.BridgeState(), path, side, proc
+    return mcp.McpState(), path, side, proc
 
 
 def test_stale_cleanup_refreshes_without_server_writes(populated, monkeypatch):
-    state, path, side, proc = bridge_job(populated, monkeypatch)
+    state, path, side, proc = mcp_job(populated, monkeypatch)
     before = path.read_bytes(), side.read_bytes()
     fake_stat(proc, 4003)
     assert state.jobs()[0]["status"] == "cleanup_incomplete"
     # Same record + same cached state, but the last known child has now ended.
     fake_stat(proc, 4003, state="Z")
     assert state.jobs()[0]["identity_state"] == "ended_lineage_gone"
-    catalog = Catalog(bridge=state).refresh()
+    catalog = Catalog(mcp=state).refresh()
     row = catalog.get("codex", CODEX_ID)
     assert row.status == "idle" and not row.active_job_ids
-    from ai_bridge_cli import trash
+    from agentls import trash
 
     assert trash.build_plan([row]).allowed
     assert before == (path.read_bytes(), side.read_bytes())
@@ -317,7 +316,7 @@ def test_stale_cleanup_refreshes_without_server_writes(populated, monkeypatch):
     ],
 )
 def test_cleanup_missing_or_live_proof_stays_uncertain(populated, monkeypatch, case):
-    state, path, side, proc = bridge_job(populated, monkeypatch)
+    state, path, side, proc = mcp_job(populated, monkeypatch)
     if case == "missing-lineage":
         side.unlink()
     elif case in ("missing-identity", "not-ended"):
@@ -333,56 +332,26 @@ def test_cleanup_missing_or_live_proof_stays_uncertain(populated, monkeypatch, c
 
 
 def test_cleanup_pid_reuse_does_not_count_as_saved_lineage(populated, monkeypatch):
-    state, path, side, proc = bridge_job(populated, monkeypatch)
+    state, path, side, proc = mcp_job(populated, monkeypatch)
     fake_stat(proc, 4003, start="999")
     assert state.jobs()[0]["identity_state"] == "ended_lineage_gone"
 
 
 def test_live_session_evidence_wins_over_ended_job(populated, monkeypatch):
-    state, path, side, proc = bridge_job(populated, monkeypatch)
+    state, path, side, proc = mcp_job(populated, monkeypatch)
     monkeypatch.setattr(
         activity, "snapshot", lambda: activity.Activity(cmdline_ids={CODEX_ID: 4999})
     )
-    assert Catalog(bridge=state).refresh().get("codex", CODEX_ID).status == "active"
+    assert Catalog(mcp=state).refresh().get("codex", CODEX_ID).status == "active"
 
 
-def test_bridge_stop_calls_only_validated_server_adapter(populated, monkeypatch):
-    make_release(populated)
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
-    fake_stat(proc, 4001)
-    fake_stat(proc, 4002)
-    fake_stat(proc, 4003)
-    plan = actions.prepare_stop([selected()])
-    assert plan.bridge_cleanup and "4003" in str(plan.targets[0].details)
-    calls = []
-
-    def stop(self, op, params):
-        calls.append((op, params))
-        for pid in (4001, 4002, 4003):
-            fake_stat(proc, pid, state="Z")
-        job = json.loads(path.read_text())
-        job["status"] = "killed"
-        path.write_text(json.dumps(job))
-        return {"cancel_requested": True}
-
-    monkeypatch.setattr(actions.BridgeRuntime, "call", stop)
-    assert actions.execute_stop(plan) == [f"codex:{CODEX_ID}"]
-    assert calls == [("agents.stop", {"job_id": "1018-000001-abcdef"})]
-
-
-def test_bridge_lineage_changes_prevent_adapter_call(populated, monkeypatch):
-    make_release(populated)
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
-    fake_stat(proc, 4001)
-    fake_stat(proc, 4002)
-    fake_stat(proc, 4003)
-    plan = actions.prepare_stop([selected()])
-    side.write_text(side.read_text() + " ")
-    calls = []
-    monkeypatch.setattr(actions.BridgeRuntime, "call", lambda *a: calls.append(a))
-    with pytest.raises(UnsafePath, match="identity changed"):
-        actions.execute_stop(plan)
-    assert not calls
+def test_stop_refuses_session_with_running_mcp_job(populated, monkeypatch):
+    state, path, side, proc = mcp_job(populated, monkeypatch, status="running")
+    for pid in (4001, 4002, 4003):
+        fake_stat(proc, pid)
+    with pytest.raises(UnsafePath, match="stop it through the MCP server"):
+        actions.prepare_stop([selected()])
+    assert Path(selected().storage_path).exists()
 
 
 @pytest.mark.parametrize(
@@ -414,7 +383,7 @@ def test_native_force_refusal_never_reports_success(
 @pytest.mark.parametrize("choice", ["n", "enter", "escape", "y"])
 def test_force_tui_grouped_preview_and_cancel(populated, choice):
     from test_tui import drive, keys, settle
-    from ai_bridge_cli.tui import screens
+    from agentls.tui import screens
 
     async def scenario(app, pilot):
         app._q("#table").move_cursor(row=keys(app).index(f"codex:{CODEX_ID}"))
@@ -438,7 +407,7 @@ def test_force_tui_grouped_preview_and_cancel(populated, choice):
 
 def test_stop_tui_retains_chat_and_warns(process, populated):
     from test_tui import drive, keys, settle
-    from ai_bridge_cli.tui import screens
+    from agentls.tui import screens
 
     row, launch = process
     child = launch()
@@ -467,7 +436,7 @@ def test_stop_tui_retains_chat_and_warns(process, populated):
 
 def test_remove_menu_exposes_independent_actions(populated):
     from test_tui import drive, keys, settle
-    from ai_bridge_cli.tui import screens
+    from agentls.tui import screens
 
     async def scenario(app, pilot):
         app._q("#table").move_cursor(row=keys(app).index(f"codex:{CODEX_ID}"))
@@ -495,7 +464,7 @@ def test_verified_claude_cursor_native_process_scope(
     populated, monkeypatch, agent, sid, name
 ):
     import shutil
-    from ai_bridge_cli.tui import process_delete
+    from agentls.tui import process_delete
 
     row = selected(agent, sid)
     root = populated.root / "fake-proc"
@@ -525,94 +494,14 @@ def test_verified_claude_cursor_native_process_scope(
         ),
     )
     plan = actions.prepare_stop([row])
-    assert plan.targets[0].process.pid == 800001 and not plan.bridge_cleanup
+    assert plan.targets[0].process.pid == 800001
     (base / "task" / "800001" / "children").write_text("800002")
     with pytest.raises(UnsafePath, match="child processes"):
         actions.prepare_stop([row])
 
 
-def test_bridge_cancellation_request_is_not_completed_stop(populated, monkeypatch):
-    make_release(populated)
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
-    fake_stat(proc, 4001)
-    fake_stat(proc, 4002)
-    fake_stat(proc, 4003)
-    plan = actions.prepare_stop([selected()])
-    monkeypatch.setattr(
-        actions.BridgeRuntime, "call", lambda *a: {"cancel_requested": True}
-    )
-    with pytest.raises(UnsafePath, match="cleanup is still unconfirmed"):
-        actions.execute_stop(plan)
-    assert Path(selected().storage_path).exists()
-
-
-@pytest.mark.parametrize("answer", ["n", "y"])
-def test_bridge_tui_requires_distinct_background_escalation_confirmation(
-    populated, monkeypatch, answer
-):
-    from test_tui import drive, keys, settle
-    from ai_bridge_cli.tui import screens
-
-    make_release(populated)
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
-    fake_stat(proc, 4001)
-    fake_stat(proc, 4002)
-    fake_stat(proc, 4003)
-    calls = []
-
-    def cancel(self, op, params):
-        calls.append((op, params))
-        for pid in (4001, 4002, 4003):
-            fake_stat(proc, pid, state="Z")
-        job = json.loads(path.read_text())
-        job["status"] = "killed"
-        path.write_text(json.dumps(job))
-        return {"cancel_requested": True}
-
-    monkeypatch.setattr(actions.BridgeRuntime, "call", cancel)
-
-    async def scenario(app, pilot):
-        app._q("#table").move_cursor(row=keys(app).index(f"codex:{CODEX_ID}"))
-        await pilot.press("x")
-        await settle(pilot, app)
-        assert isinstance(app.screen, screens.DeleteConfirmScreen)
-        assert "4003" in app.screen.body.plain
-        await pilot.press("y")
-        await settle(pilot, app)
-        assert isinstance(app.screen, screens.DeleteConfirmScreen)
-        assert "SIGKILL" in app.screen.title_text and app.focused.id == "cancel"
-        assert not calls
-        await pilot.press(answer)
-        await settle(pilot, app)
-        assert bool(calls) == (answer == "y")
-        assert len(app.screen_stack) == 1 and Path(selected().storage_path).exists()
-
-    drive(scenario, size=(40, 20))
-
-
-def test_completed_bridge_record_with_live_background_is_not_stop_success(
-    populated, monkeypatch
-):
-    make_release(populated)
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
-    for pid in (4001, 4002, 4003):
-        fake_stat(proc, pid)
-    plan = actions.prepare_stop([selected()])
-
-    def incomplete(self, op, params):
-        job = json.loads(path.read_text())
-        job["status"] = "killed"
-        path.write_text(json.dumps(job))
-        fake_stat(proc, 4001, state="Z")
-        return {"cancel_requested": True}
-
-    monkeypatch.setattr(actions.BridgeRuntime, "call", incomplete)
-    with pytest.raises(UnsafePath, match="cleanup is still unconfirmed"):
-        actions.execute_stop(plan)
-
-
-def test_native_force_previews_bridge_background_lineage(populated, monkeypatch):
-    state, path, side, proc = bridge_job(populated, monkeypatch, status="running")
+def test_native_force_previews_mcp_background_lineage(populated, monkeypatch):
+    state, path, side, proc = mcp_job(populated, monkeypatch, status="running")
     for pid in (4001, 4002, 4003):
         fake_stat(proc, pid)
     plan = codex_delete.prepare_force([selected()])
@@ -640,7 +529,7 @@ def test_native_force_cyclic_selected_ancestry_is_refused(populated):
 
 def test_group_stop_exact_native_parent_and_descendant(process, populated, monkeypatch):
     import subprocess
-    from ai_bridge_cli.tui import process_delete
+    from agentls.tui import process_delete
 
     row, launch = process
     parent = launch()
@@ -727,7 +616,7 @@ def test_new_descendant_after_stop_blocks_quarantine(populated, monkeypatch):
 def test_related_background_writer_prevents_stop_and_quarantine(
     populated, monkeypatch, agent, sid
 ):
-    from ai_bridge_cli import trash
+    from agentls import trash
 
     row = selected(agent, sid)
     if agent == "claude":

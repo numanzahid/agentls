@@ -27,7 +27,7 @@ class PreflightError(ValueError):
 
 
 def find_binary(agent: str) -> str | None:
-    override = os.environ.get(f"AI_BRIDGE_{agent.upper()}_BIN", "").strip()
+    override = os.environ.get(f"AGENTLS_{agent.upper()}_BIN", "").strip()
     if override:
         return shutil.which(override) or (override if os.access(override, os.X_OK) else None)
     if agent in ("claude", "codex"):
@@ -69,9 +69,9 @@ def probe_help(argv: list[str], timeout: float = 15) -> str:
 
 
 def native_env() -> dict[str, str]:
-    # Bridge/CLI settings (some may reference secrets) are not for native CLIs.
+    # Our settings and the ai-bridge MCP server's (its token among them) are not for native CLIs.
     return {k: v for k, v in os.environ.items()
-            if not k.startswith("AI_BRIDGE_") and k != "CREDENTIALS_DIRECTORY"}
+            if not k.startswith(("AGENTLS_", "AI_BRIDGE_")) and k != "CREDENTIALS_DIRECTORY"}
 
 
 def storage_safe(session: Session) -> os.stat_result:
@@ -124,7 +124,7 @@ def plan(session: Session, action: str = "open", activity: activity_mod.Activity
         raise PreflightError(f"Session appears to be in use ({evidence or session.status_note}); "
                              "opening it twice can corrupt or fork its history.")
     if session.agent == "cursor" and not paths.cursor_home_is_default():
-        raise PreflightError("AI_BRIDGE_CURSOR_HOME points away from ~/.cursor; Cursor CLI would open "
+        raise PreflightError("AGENTLS_CURSOR_HOME points away from ~/.cursor; Cursor CLI would open "
                              "a different store. Unset it to resume Cursor chats.")
     info = storage_safe(session)
     cwd = session.cwd

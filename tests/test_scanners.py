@@ -5,7 +5,7 @@ import sqlite3
 import fixtures
 from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli.scanners import Scanner, claude, codex, cursor, history
+from agentls.scanners import Scanner, claude, codex, cursor, history
 
 
 def by_agent(result, agent):
@@ -180,7 +180,7 @@ def test_cursor_last_used_metadata_not_selected_default(env):
 
 
 def test_reverse_jsonl_chunk_boundaries_and_oversized_records(tmp_path, monkeypatch):
-    from ai_bridge_cli.scanners import common
+    from agentls.scanners import common
     monkeypatch.setattr(common, "TAIL_BYTES", 32)
     monkeypatch.setattr(common, "MAX_LINE", 80)
     path = fixtures.write_jsonl(tmp_path / "test.jsonl", [

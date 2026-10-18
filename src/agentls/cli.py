@@ -1,4 +1,4 @@
-"""ai-bridge: browse and manage local Claude Code, Codex and Cursor CLI sessions.
+"""agentls: browse and manage local Claude Code, Codex and Cursor CLI sessions.
 
 Run without arguments in a terminal to open the interactive browser.
 Output is a table on a terminal and JSON otherwise (force with --json/--table).
@@ -10,34 +10,26 @@ import json
 import os
 import shutil
 import sys
-from pathlib import Path
 
 from . import __version__, paths
 
 EPILOG = """\
 examples:
-  ai-bridge                                   open the session browser (TUI)
-  ai-bridge sessions list --agent codex --search refactor
-  ai-bridge sessions list --origin mcp --json
-  ai-bridge sessions inspect claude:1b2c3d4e --history 10
-  ai-bridge sessions open codex:<UUID> --dry-run
-  ai-bridge sessions archive claude:<UUID> cursor:<UUID>
-  ai-bridge sessions delete claude:<UUID> --dry-run      (preview, prints plan id)
-  ai-bridge sessions delete claude:<UUID> --yes --plan-id <ID>
-  ai-bridge sessions trash list
+  agentls                                   open the session browser (TUI)
+  agentls sessions list --agent codex --search refactor
+  agentls sessions list --origin mcp --json
+  agentls sessions inspect claude:1b2c3d4e --history 10
+  agentls sessions open codex:<UUID> --dry-run
+  agentls sessions archive claude:<UUID> cursor:<UUID>
+  agentls sessions delete claude:<UUID> --dry-run      (preview, prints plan id)
+  agentls sessions delete claude:<UUID> --yes --plan-id <ID>
+  agentls sessions trash list
 
 selectors are agent:UUID (inspect also accepts a unique ID prefix of 8+ chars).
-bridge commands (agents/tasks, sessions continue/start) need an installed
-ai-bridge server on this account; read-only views never modify its state.
 """
 
-PROG_NAMES = ("ai-bridge", "ai-bridge-cli")
+PROG = "agentls"
 EXIT_PARTIAL = 3
-
-
-def prog_name() -> str:
-    name = os.environ.get("AI_BRIDGE_CLI_PROG") or Path(sys.argv[0]).name
-    return name if name in PROG_NAMES else "ai-bridge"
 
 
 def interactive_terminal() -> bool:
@@ -65,20 +57,9 @@ def _selector(parser, nargs=None, help_text="agent:UUID"):
     parser.add_argument("--agent", choices=paths.AGENTS, help="agent, when SESSION is a bare UUID")
 
 
-def _turn(parser):
-    parser.add_argument("prompt", help="prompt for the headless turn")
-    parser.add_argument("--cwd", help="project directory (start) or expected saved project (continue)")
-    parser.add_argument("--task-id", help="bridge task workspace")
-    parser.add_argument("--permission", choices=("full", "edit", "readonly"))
-    parser.add_argument("--model")
-    parser.add_argument("--timeout", type=int, help="turn timeout in seconds")
-    parser.add_argument("--wait", type=float, default=0, metavar="SECONDS",
-                        help="wait up to SECONDS for the turn and print its result")
-
-
 def build_parser() -> argparse.ArgumentParser:
     fmt = argparse.RawDescriptionHelpFormatter
-    p = Parser(prog=prog_name(), description=__doc__, epilog=EPILOG, formatter_class=fmt)
+    p = Parser(prog=PROG, description=__doc__, epilog=EPILOG, formatter_class=fmt)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     groups = p.add_subparsers(dest="group", metavar="COMMAND")
     shell = groups.add_parser("shell-init", help="print opt-in shell integration (source the output)")
@@ -95,13 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
                                    "unless requested.")
     ls.add_argument("--agent", action="append", choices=paths.AGENTS, help="repeatable")
     ls.add_argument("--origin", choices=("mcp", "direct", "unknown"),
-                    help="mcp = verified bridge provenance record; direct = none; unknown = unverifiable")
+                    help="mcp = verified MCP provenance record; direct = none; unknown = unverifiable")
     ls.add_argument("--status", choices=("active", "uncertain", "recent", "idle"))
     ls.add_argument("--project", help="exact project directory")
     ls.add_argument("--mode", choices=("interactive", "noninteractive", "unknown"),
                     help="native launch mode (says nothing about MCP origin)")
     ls.add_argument("--type", choices=("main", "subagent", "unknown"))
-    ls.add_argument("--task-id", help="bridge task workspace")
     ls.add_argument("--search", "-s", default="", help="words that must all appear (title, project, ID, model)")
     ls.add_argument("--sort", choices=("updated", "title", "agent", "project"), default="updated")
     ls.add_argument("--reverse", action="store_true")
@@ -131,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         _selector(sa.add_parser(name, help=text), nargs="+")
 
     de = sa.add_parser("delete", help="native delete into a restorable trash (preview first)",
-                       description="Move sessions to the ai-bridge-cli trash (Claude, Cursor) or archive them "
+                       description="Move sessions to the agentls trash (Claude, Cursor) or archive them "
                                    "with `codex archive` (Codex). Active or recently modified sessions are refused. "
                                    "Without --yes this is a preview.")
     _selector(de, nargs="+")
@@ -152,38 +132,6 @@ def build_parser() -> argparse.ArgumentParser:
     pg = ta.add_parser("purge", help="permanently remove one trash batch")
     pg.add_argument("batch")
     pg.add_argument("--yes", action="store_true", help="required")
-
-    co = sa.add_parser("continue", help="[bridge] run a headless turn in an existing session")
-    _selector(co)
-    _turn(co)
-    st = sa.add_parser("start", help="[bridge] start a new headless session")
-    st.add_argument("--agent", choices=paths.AGENTS, required=True)
-    _turn(st)
-
-    ag = groups.add_parser("agents", help="[bridge] managed agent jobs")
-    aa = ag.add_subparsers(dest="action", metavar="ACTION", required=True)
-    stat = aa.add_parser("status", help="list bridge agent jobs (read-only)")
-    stat.add_argument("--limit", type=int, default=30, help="0 = all")
-    stat.add_argument("--active", action="store_true", help="only running/uncertain jobs")
-    aa.add_parser("inspect", help="one job's details (read-only)").add_argument("job_id")
-    aa.add_parser("stop", help="cancel a running bridge job (via the bridge runtime)").add_argument("job_id")
-
-    tk = groups.add_parser("tasks", help="[bridge] managed task workspaces")
-    tka = tk.add_subparsers(dest="action", metavar="ACTION", required=True)
-    tka.add_parser("list", help="list tasks (read-only)")
-    tka.add_parser("inspect", help="one task (read-only)").add_argument("task_id")
-    tka.add_parser("create", help="create a task workspace (via the bridge runtime)")
-    cl = tka.add_parser("cleanup", help="remove a task workspace (via the bridge runtime)")
-    cl.add_argument("task_id")
-    cl.add_argument("--dry-run", action="store_true")
-    cl.add_argument("--yes", action="store_true", help="approve removal of this exact task workspace")
-    cl.add_argument("--allow-uninspectable", action="store_true",
-                    help="HIGH RISK: ignore unreadable process cwd observations; still requires --yes")
-
-    br = groups.add_parser("bridge", help="bridge integration diagnostics")
-    ba = br.add_subparsers(dest="action", metavar="ACTION", required=True)
-    bs = ba.add_parser("status", help="where state is read from and whether the runtime is usable")
-    bs.add_argument("--probe", action="store_true", help="also start the runtime interpreter once")
 
     def add_formats(parser, depth=0):
         _formats(parser, depth)
@@ -221,20 +169,6 @@ def _confirm(prompt: str, word: str) -> bool:
         return False
 
 
-def _turn_params(args):
-    return {k: getattr(args, k) for k in ("prompt", "cwd", "task_id", "permission", "model", "timeout")}
-
-
-def _after_start(meta, args):
-    from .bridge import BridgeState, wait_for_job
-    job_id = meta.get("id") or meta.get("job_id")
-    if args.wait and job_id:
-        state = BridgeState()
-        meta = state.job_view(wait_for_job(state, job_id, args.wait), detail=True)
-    meta["next"] = f"{prog_name()} agents inspect {job_id}"
-    return meta
-
-
 # -- dispatch -----------------------------------------------------------------
 
 def dispatch(args):
@@ -242,58 +176,7 @@ def dispatch(args):
     group, action = args.group, getattr(args, "action", None)
     if group == "sessions":
         return _sessions(args, action)
-    if group == "agents":
-        from .bridge import BridgeRuntime, BridgeState
-        state = BridgeState()
-        if action == "status":
-            rows = [state.job_view(m) for m in state.jobs("agent")]
-            if args.active:
-                rows = [r for r in rows if r["status"] in ("running", "cleanup_incomplete", "lost")]
-            return "jobs", rows[:args.limit] if args.limit > 0 else rows
-        if action == "inspect":
-            meta = state.job(args.job_id)
-            if meta.get("kind") != "agent":
-                raise ValueError("Not a managed agent job.")
-            return "details", state.job_view(meta, detail=True)
-        state.job(args.job_id)  # exact, existing ID before touching the runtime
-        return "details", BridgeRuntime().call("agents.stop", {"job_id": args.job_id})
-    if group == "tasks":
-        from .bridge import BridgeRuntime, BridgeState
-        if action == "list":
-            return "tasks", BridgeState().tasks()
-        if action == "inspect":
-            return "details", BridgeState().task(args.task_id)
-        if action == "create":
-            return "details", BridgeRuntime().call("tasks.create")
-        if not args.dry_run and not args.yes:
-            raise ValueError("Preview with --dry-run; removal requires --yes and an exact task ID.")
-        BridgeState().task(args.task_id)
-        return "details", BridgeRuntime().call("tasks.cleanup", {
-            "task_id": args.task_id, "dry_run": args.dry_run or not args.yes,
-            "allow_uninspectable": args.allow_uninspectable, "confirmed": args.yes})
-    if group == "bridge":
-        return "details", _bridge_status(args.probe)
     raise ValueError("Unknown command.")
-
-
-def _bridge_status(probe: bool) -> dict:
-    from .bridge import BridgeRuntime, BridgeState, BridgeUnavailable
-    from .provenance import ProvenanceReader
-    state = BridgeState()
-    with ProvenanceReader() as reader:
-        prov = {"state": reader.state, "note": reader.note, "records": len(reader.names)}
-    out = {"state_dir": str(state.state_dir), "jobs_readable": state.available,
-           "tasks_dir": str(state.tasks_dir), "provenance": prov,
-           "install_root": str(BridgeRuntime().root), "cli_state_dir": str(paths.cli_state_dir()),
-           "trash_dir": str(paths.trash_dir()),
-           "stores": {a: str(paths.agent_root(a)) for a in paths.AGENTS}}
-    try:
-        out["runtime"] = BridgeRuntime().locate()
-        if probe:
-            out["runtime"]["probe"] = BridgeRuntime().call("probe", timeout=30)
-    except (BridgeUnavailable, RuntimeError, OSError) as error:
-        out["runtime"] = {"available": False, "reason": str(error)}
-    return out
 
 
 def _sessions(args, action):
@@ -305,8 +188,7 @@ def _sessions(args, action):
                   search=args.search, archived="include" if args.all else args.archived,
                   native_archived=args.native_archived or args.all, sort=args.sort, reverse=args.reverse)
         rows = [s for s in catalog.query(q)
-                if (not args.mode or s.mode == args.mode) and (not args.type or s.session_type == args.type)
-                and (not args.task_id or s.task_id == args.task_id)]
+                if (not args.mode or s.mode == args.mode) and (not args.type or s.session_type == args.type)]
         offset = max(0, args.offset)
         page = rows[offset:offset + args.limit] if args.limit > 0 else rows[offset:]
         nxt = offset + len(page) if offset + len(page) < len(rows) else None
@@ -355,15 +237,6 @@ def _sessions(args, action):
         return _delete(args)
     if action == "trash":
         return _trash(args)
-    if action in ("continue", "start"):
-        from .bridge import BridgeRuntime
-        params = _turn_params(args)
-        if action == "continue":
-            session = _catalog(probe_activity=False).resolve(args.session, args.agent)
-            params.update(agent=session.agent, session_id=session.session_id)
-        else:
-            params.update(agent=args.agent, session_id=None)
-        return "details", _after_start(BridgeRuntime().call("sessions.start", params), args)
     raise ValueError("Unknown sessions action.")
 
 
@@ -376,7 +249,7 @@ def _delete(args):
     if args.dry_run or not args.yes:
         if args.dry_run or not interactive_terminal() or not plan.allowed:
             extra = " --allow-uninspectable" if args.allow_uninspectable else ""
-            preview["next"] = (f"{prog_name()} sessions delete {' '.join(args.session)}{extra} --yes --plan-id "
+            preview["next"] = (f"{PROG} sessions delete {' '.join(args.session)}{extra} --yes --plan-id "
                                f"{plan.plan_id}") if plan.allowed else "Nothing can be deleted."
             return "plan", preview
         from .output import render
@@ -423,7 +296,7 @@ def _trash(args):
 
 def _emit_error(message: str, extra: dict | None = None) -> None:
     if sys.stderr.isatty() and sys.stdout.isatty():
-        print(f"{prog_name()}: error: {message}", file=sys.stderr)
+        print(f"{PROG}: error: {message}", file=sys.stderr)
     else:
         print(json.dumps({"error": message, "automatic_retry": False, **(extra or {})}), file=sys.stderr)
 
@@ -462,8 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit_error("Interrupted.")
         return 130
     except Exception as error:  # noqa: BLE001 - every failure becomes one clear message
-        from .bridge import BridgeUnavailable
-        known = (OSError, ValueError, KeyError, RuntimeError, BridgeUnavailable)
+        known = (OSError, ValueError, KeyError, RuntimeError)
         message = str(error.args[0]) if isinstance(error, KeyError) and error.args else str(error)
         if not isinstance(error, known):
             message = f"{type(error).__name__}: {error}"

@@ -1,7 +1,7 @@
 """Conservative filesystem primitives.
 
 Rules used throughout:
-* Native/bridge data is opened with O_NOFOLLOW and checked with fstat, so a
+* Native and MCP server data is opened with O_NOFOLLOW and checked with fstat, so a
   swapped-in symlink cannot redirect a read or a move.
 * Paths below an agent root are walked one component at a time with
   O_NOFOLLOW; a symlink anywhere below the root means "outside the root".
@@ -172,10 +172,7 @@ def identity(info: os.stat_result) -> dict:
 
 
 def private_primary_group(owner: int, gid: int) -> bool:
-    """True only for an enumerated primary group with no other members.
-
-    Adapted from the MIT-licensed ai-bridge server (ai_bridge/permissions.py).
-    """
+    """True only for an enumerated primary group with no other members."""
     import grp
     import pwd
     try:

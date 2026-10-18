@@ -1,4 +1,4 @@
-# ai-bridge-cli
+# agentls
 
 A terminal browser and manager for the local sessions of
 [Claude Code](https://docs.claude.com/en/docs/claude-code), OpenAI Codex CLI and Cursor CLI.
@@ -9,12 +9,12 @@ A terminal browser and manager for the local sessions of
 * Stop running sessions and force-delete them, always behind a confirmation.
 * Headless `--json` / table commands for scripts.
 
-It is a standalone Python package and works without the ai-bridge server. If an
-[ai-bridge](https://github.com/numanzahid/ai-bridge) MCP server runs on the same account, it also
-shows which sessions came through MCP and can manage bridge jobs and tasks.
+It is a standalone Python package. If an [ai-bridge](https://github.com/numanzahid/ai-bridge) MCP
+server runs on the same account, the Origin column shows which sessions came through MCP; nothing
+else depends on it.
 
 ```
- ai-bridge — local agent sessions
+ agentls — local agent sessions
  Search title, project, ID, model…  ( / )   All agents ▼  Any origin ▼  Any status ▼  All projects ▼
     Agent   Title                  Last Model           Updated  │ Title       Parser refactor
   ● claude  Fix the login bug      claude-sonnet-4-6     just now │ Last Model  gpt-5.4
@@ -29,7 +29,7 @@ shows which sessions came through MCP and can manage bridge jobs and tasks.
 Requires Linux and Python 3.12+. Installs into its own virtualenv; no `sudo`, no global packages.
 
 ```bash
-git clone https://github.com/numanzahid/ai-bridge-cli.git && cd ai-bridge-cli
+git clone https://github.com/numanzahid/agentls.git && cd agentls
 bash install.sh --dry-run   # preview
 bash install.sh             # install or update (git pull first to update)
 ```
@@ -40,14 +40,14 @@ bash install.sh             # install or update (git pull first to update)
 ## Use
 
 ```bash
-ai-bridge                                   # open the browser (prints help when not on a terminal)
-ai-bridge sessions list --agent codex --search refactor
-ai-bridge sessions inspect claude:1b2c3d4e --history 10
-ai-bridge sessions delete claude:<UUID> --dry-run
-ai-bridge --help                            # every command; each subcommand has --help
+agentls                                   # open the browser (prints help when not on a terminal)
+agentls sessions list --agent codex --search refactor
+agentls sessions inspect claude:1b2c3d4e --history 10
+agentls sessions delete claude:<UUID> --dry-run
+agentls --help                            # every command; each subcommand has --help
 ```
 
-`ai-bridge` and `ai-bridge-cli` are the same program. In the browser, press `?` for keys.
+In the browser, press `?` for keys.
 
 ## Documentation
 
@@ -56,7 +56,7 @@ ai-bridge --help                            # every command; each subcommand has
 | [Usage](docs/usage.md) | browser keys, layout, columns, headless commands |
 | [Opening sessions](docs/opening.md) | native launch, shell integration, settings |
 | [Removing sessions](docs/removal.md) | archive, trash, stop, force delete and their safety checks |
-| [ai-bridge integration](docs/bridge.md) | MCP origin, bridge commands, configuration |
+| [MCP origin and configuration](docs/mcp.md) | the Origin column, environment variables |
 | [Install details](docs/install.md) | what `install.sh` does, rollback, uninstall |
 | [Development](docs/development.md) | tests and the release process |
 
@@ -65,5 +65,4 @@ ai-bridge --help                            # every command; each subcommand has
 Linux only (activity detection uses `/proc`). The trash must be on the same filesystem as the
 session stores. Cursor CLI has no native fork.
 
-The scanners, the Cursor store reader and parts of the terminal output were adapted from the
-MIT-licensed ai-bridge server. MIT licensed; see `LICENSE`.
+MIT licensed; see `LICENSE`.

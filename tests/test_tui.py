@@ -7,9 +7,9 @@ import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli import native, settings
-from ai_bridge_cli.tui import screens
-from ai_bridge_cli.tui.app import SessionBrowser
+from agentls import native, settings
+from agentls.tui import screens
+from agentls.tui.app import SessionBrowser
 
 
 def browser():
@@ -285,7 +285,7 @@ def test_open_refusal_is_reported_not_launched(populated, monkeypatch):
 
 
 def test_list_position_counter_and_thin_scrollbar(populated):
-    from ai_bridge_cli.tui.scrollbar import ThinScrollBarRender
+    from agentls.tui.scrollbar import ThinScrollBarRender
 
     async def scenario(app, pilot):
         table = app.query_one("#table")
@@ -466,7 +466,7 @@ def test_settings_shortcut_in_search_does_not_type_or_leak(populated):
 
 @pytest.mark.parametrize("confirm", [False, True])
 def test_default_open_exits_only_after_confirmation(populated, monkeypatch, confirm):
-    from ai_bridge_cli.tui.app import NativeHandoff
+    from agentls.tui.app import NativeHandoff
     monkeypatch.setattr(native, "interactive_terminal", lambda: True)
     calls = []
     monkeypatch.setattr(native, "run", lambda plan: calls.append("child"))
@@ -495,7 +495,7 @@ def test_default_open_exits_only_after_confirmation(populated, monkeypatch, conf
 
 @pytest.mark.parametrize("failure", ["active", "non-tty", "missing-cwd", "missing-cli", "os-error"])
 def test_open_recheck_refusal_keeps_browser(populated, monkeypatch, failure):
-    from ai_bridge_cli.activity import Activity
+    from agentls.activity import Activity
     monkeypatch.setattr(native, "interactive_terminal", lambda: failure != "non-tty")
 
     async def scenario(app, pilot):
@@ -557,8 +557,8 @@ def test_settings_failure_keeps_current_mode(populated, monkeypatch):
 
 
 def test_wrapper_executes_only_after_tui_returns(populated, monkeypatch):
-    from ai_bridge_cli.catalog import Catalog
-    from ai_bridge_cli.tui import app as module
+    from agentls.catalog import Catalog
+    from agentls.tui import app as module
     session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
     plan = native.plan(session)
     order = []
@@ -574,8 +574,8 @@ def test_wrapper_executes_only_after_tui_returns(populated, monkeypatch):
 
 @pytest.mark.parametrize("stage", ["recheck", "exec_"])
 def test_wrapper_launch_failure_reported_cleanly(populated, monkeypatch, capsys, stage):
-    from ai_bridge_cli.catalog import Catalog
-    from ai_bridge_cli.tui import app as module
+    from agentls.catalog import Catalog
+    from agentls.tui import app as module
     session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
     plan = native.plan(session)
     monkeypatch.setattr(native, "interactive_terminal", lambda: True)
@@ -593,7 +593,7 @@ def test_wrapper_launch_failure_reported_cleanly(populated, monkeypatch, capsys,
 
 
 def test_wrapper_non_tty_is_graceful(monkeypatch, capsys):
-    from ai_bridge_cli.tui import app as module
+    from agentls.tui import app as module
     monkeypatch.setattr(native, "interactive_terminal", lambda: False)
     assert module.run() == 2
     assert "interactive" in capsys.readouterr().err
@@ -626,8 +626,8 @@ def test_incomplete_delete_preview_gives_safe_alternatives(populated):
 
     from rich.console import Console
 
-    from ai_bridge_cli import activity, trash
-    from ai_bridge_cli.catalog import Catalog
+    from agentls import activity, trash
+    from agentls.catalog import Catalog
     session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
     plan = trash.build_plan([session], act=activity.Activity(uninspectable=[(42, "codex")]))
     out = StringIO()
@@ -713,7 +713,7 @@ def test_remove_cancel_never_touches_stores(populated, monkeypatch, cancel):
 def test_process_delete_cancel_keeps_files(populated, monkeypatch, cancel):
     from types import SimpleNamespace
 
-    from ai_bridge_cli import trash
+    from agentls import trash
     async def scenario(app, pilot):
         target = app.by_key[f'codex:{CODEX_ID}']
         plan = trash.build_plan([target])
@@ -739,7 +739,7 @@ def test_process_delete_cancel_keeps_files(populated, monkeypatch, cancel):
 def test_process_delete_explicit_consent(populated, monkeypatch, confirm):
     from types import SimpleNamespace
 
-    from ai_bridge_cli import trash
+    from agentls import trash
     async def scenario(app, pilot):
         target = app.by_key[f'codex:{CODEX_ID}']
         plan = trash.build_plan([target])
@@ -757,11 +757,11 @@ def test_process_delete_explicit_consent(populated, monkeypatch, confirm):
     drive(scenario)
 
 
-@pytest.mark.parametrize('blocker', ['active', 'recent', 'uninspectable', 'bridge-job', 'unsupported'])
+@pytest.mark.parametrize('blocker', ['active', 'recent', 'uninspectable', 'mcp-job', 'unsupported'])
 def test_native_delete_blocked_modal_cannot_confirm(populated, monkeypatch, blocker):
     from dataclasses import replace
 
-    from ai_bridge_cli import activity, trash
+    from agentls import activity, trash
 
     async def scenario(app, pilot):
         target = app.by_key[f'codex:{CODEX_ID}' if blocker == 'unsupported' else f'claude:{CLAUDE_ID}']
@@ -769,7 +769,7 @@ def test_native_delete_blocked_modal_cannot_confirm(populated, monkeypatch, bloc
             monkeypatch.setenv('FAKE_NO_ARCHIVE', '1')
         elif blocker == 'recent':
             os.utime(target.storage_path, None)
-        elif blocker == 'bridge-job':
+        elif blocker == 'mcp-job':
             target = replace(target, active_job_ids=['unfinished-job'])
         act = (activity.Activity(claude_live={CLAUDE_ID: 42}) if blocker == 'active' else
                activity.Activity(uninspectable=[(42, 'codex')]) if blocker == 'uninspectable' else
@@ -790,7 +790,7 @@ def test_native_delete_blocked_modal_cannot_confirm(populated, monkeypatch, bloc
 
 @pytest.mark.parametrize('change', ['file', 'activity', 'uninspectable'])
 def test_native_delete_rechecks_after_keyboard_confirmation(populated, monkeypatch, change):
-    from ai_bridge_cli import activity
+    from agentls import activity
 
     async def scenario(app, pilot):
         target = app.by_key[f'claude:{CLAUDE_ID}']
@@ -814,7 +814,7 @@ def test_native_delete_rechecks_after_keyboard_confirmation(populated, monkeypat
 def test_mixed_selection_refuses_partial_deletion(populated):
     from dataclasses import replace
 
-    from ai_bridge_cli import activity, trash
+    from agentls import activity, trash
     async def scenario(app, pilot):
         allowed = app.by_key[f'claude:{CLAUDE_ID}']
         blocked = replace(app.by_key[f'cursor:{CURSOR_ID}'], status='active', status_note='in use')
@@ -1125,7 +1125,7 @@ def test_removal_modal_layout_is_balanced_and_unclipped(env, width, kind):
 
 
 def test_preview_shows_last_user_messages_and_last_reply_only(populated):
-    from ai_bridge_cli.tui.app import conversation_preview
+    from agentls.tui.app import conversation_preview
 
     msgs = ([{"role": "user", "text": f"ask {i}"} for i in range(7)]
             + [{"role": "tool", "text": "ls -la"}, {"role": "assistant", "text": "first"},
@@ -1146,7 +1146,7 @@ def test_preview_shows_last_user_messages_and_last_reply_only(populated):
     (15, 5, 5, 21, (7, 7)), (15, 5, 10, 21, (14, 7)), (15, 5, 1, 21, (2, 7)), (15, 5, 9, 21, (12, 7)),
 ])
 def test_scrollbar_thumb_matches_gocui(list_size, page, position, area, expected):
-    from ai_bridge_cli.tui.scrollbar import lazygit_thumb  # cases from gocui's scrollbar_test.go
+    from agentls.tui.scrollbar import lazygit_thumb  # cases from gocui's scrollbar_test.go
     assert lazygit_thumb(list_size, page, position, area) == expected
 
 

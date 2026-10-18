@@ -6,7 +6,7 @@ from pathlib import Path
 
 from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli import cli
+from agentls import cli
 
 SRC = str(Path(__file__).parents[1] / "src")
 
@@ -24,28 +24,27 @@ def as_json(capsys, *argv):
 
 
 def test_no_args_non_tty_shows_help_and_browse_refuses():
-    proc = subprocess.run([sys.executable, "-m", "ai_bridge_cli"], capture_output=True, text=True,
+    proc = subprocess.run([sys.executable, "-m", "agentls"], capture_output=True, text=True,
                           env={**os.environ, "PYTHONPATH": SRC}, stdin=subprocess.DEVNULL)
     assert proc.returncode == 0 and "sessions" in proc.stdout and "examples:" in proc.stdout
-    proc = subprocess.run([sys.executable, "-m", "ai_bridge_cli", "sessions", "browse"], capture_output=True,
+    proc = subprocess.run([sys.executable, "-m", "agentls", "sessions", "browse"], capture_output=True,
                           text=True, env={**os.environ, "PYTHONPATH": SRC}, stdin=subprocess.DEVNULL)
     assert proc.returncode == 2 and "interactive terminal" in proc.stderr
 
 
-def test_version_and_prog(capsys, monkeypatch):
-    monkeypatch.setenv("AI_BRIDGE_CLI_PROG", "ai-bridge-cli")
+def test_version_and_prog(capsys):
     try:
         cli.main(["--version"])
     except SystemExit as stop:
         assert stop.code == 0
-    assert capsys.readouterr().out.startswith("ai-bridge-cli ")
+    assert capsys.readouterr().out.startswith("agentls ")
 
 
 def test_list_json_shape_and_filters(populated, capsys):
     data = as_json(capsys, "sessions", "list")
     assert data["total"] == 4 and data["next_offset"] is None
     row = next(r for r in data["sessions"] if r["agent"] == "claude")
-    assert row["selector"] == f"claude:{CLAUDE_ID}" and row["bridge_origin"] is None
+    assert row["selector"] == f"claude:{CLAUDE_ID}" and row["origin"] != "mcp"
     assert {r["agent"] for r in as_json(capsys, "sessions", "list", "--agent", "cursor")["sessions"]} == {"cursor"}
     page = as_json(capsys, "sessions", "list", "--limit", "1", "--offset", "1")
     assert len(page["sessions"]) == 1 and page["next_offset"] == 2
@@ -117,23 +116,14 @@ def test_open_dry_run_and_non_tty_refusal(populated, capsys):
     assert code == 1 and "interactive terminal" in json.loads(err)["error"]
 
 
-def test_bridge_commands_without_runtime(populated, capsys):
-    assert as_json(capsys, "agents", "status") == []
-    assert as_json(capsys, "tasks", "list") == []
-    status = as_json(capsys, "bridge", "status")
-    assert status["runtime"]["available"] is False and status["stores"]["claude"] == str(populated.claude)
-    code, _, err = run(capsys, "sessions", "continue", f"claude:{CLAUDE_ID}", "hello")
-    assert code == 1 and "no ai-bridge server installation" in json.loads(err)["error"].lower()
-    code, _, err = run(capsys, "tasks", "cleanup", "task-" + "a" * 24)
-    assert code == 1 and "--dry-run" in json.loads(err)["error"]
-
-
-def test_bridge_continue_through_runtime(populated, capsys):
-    from test_bridge import make_release
-    make_release(populated)
-    data = as_json(capsys, "sessions", "continue", f"claude:{CLAUDE_ID}", "next step", "--permission", "readonly")
-    assert data["session_id"] == CLAUDE_ID and data["prompt_seen"] == "next step"
-    assert "agents inspect" in data["next"]
+def test_removed_server_commands_are_gone(populated, capsys):
+    for argv in (["agents", "status"], ["tasks", "list"], ["bridge", "status"],
+                 ["sessions", "continue", f"claude:{CLAUDE_ID}", "hello"]):
+        try:
+            cli.main(argv)
+        except SystemExit as stop:
+            assert stop.code == 2
+        capsys.readouterr()
 
 
 def test_usage_error_is_json(capsys):

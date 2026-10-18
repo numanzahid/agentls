@@ -1,7 +1,4 @@
-"""JSONL helpers shared by the transcript scanners.
-
-Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
-"""
+"""JSONL helpers shared by the transcript scanners."""
 from __future__ import annotations
 
 import json

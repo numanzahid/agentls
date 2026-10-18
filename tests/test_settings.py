@@ -4,8 +4,8 @@ import stat
 
 import pytest
 
-from ai_bridge_cli import paths, settings
-from ai_bridge_cli.fsutil import UnsafePath
+from agentls import paths, settings
+from agentls.fsutil import UnsafePath
 
 
 def test_default_and_private_atomic_persistence(env):

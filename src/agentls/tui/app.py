@@ -117,7 +117,7 @@ ScrollBar.renderer = ThinScrollBarRender  # lazygit-style thin thumb, no track
 
 class SessionBrowser(App):
     CSS_PATH = "app.tcss"
-    TITLE = "ai-bridge"
+    TITLE = "agentls"
     SUB_TITLE = "local agent sessions"
 
     BINDINGS = [
@@ -196,7 +196,7 @@ class SessionBrowser(App):
                               ("Cursor", "cursor")], value="all", allow_blank=False, id="agent", compact=True)
                 yield Select([("Interactive", "hide"), ("All modes", "include"), ("Non-interactive", "only")],
                              value="hide", allow_blank=False, id="mode", compact=True)
-                yield Select([("Any origin", "all"), ("MCP (bridge)", "mcp"), ("Direct", "direct"),
+                yield Select([("Any origin", "all"), ("MCP", "mcp"), ("Direct", "direct"),
                               ("Unknown", "unknown")], value="all", allow_blank=False, id="origin", compact=True)
                 yield Select([("Any status", "all"), ("Active", "active"), ("Uncertain", "uncertain"),
                               ("Recent", "recent"), ("Idle", "idle")], value="all", allow_blank=False, id="status",
@@ -430,7 +430,7 @@ class SessionBrowser(App):
             roots = "\n".join(f"  {a}: {home_short(r)}" for a, r in
                               ((a, str(paths.agent_root(a))) for a in paths.AGENTS))
             empty.update(Text(f"No sessions found in the native stores:\n{roots}\n\n"
-                              "Set CLAUDE_CONFIG_DIR, CODEX_HOME or AI_BRIDGE_CURSOR_HOME if they live "
+                              "Set CLAUDE_CONFIG_DIR, CODEX_HOME or AGENTLS_CURSOR_HOME if they live "
                               "elsewhere, then press r.", style="dim"))
         else:
             hidden = sum(1 for s in self.by_key.values() if s.archived)
@@ -577,8 +577,7 @@ class SessionBrowser(App):
             ("Parent", Text(s.parent_session_id)) if s.parent_session_id else None,
             ("Resumable", Text("yes", style="green") if s.resumable else
              Text.assemble(("no", "red"), (f"  {s.resume_note or ''}", "dim"))),
-            ("Bridge jobs", Text(", ".join(s.job_ids[-5:]))) if s.job_ids else None,
-            ("Task", Text(s.task_id)) if s.task_id else None,
+            ("MCP jobs", Text(", ".join(s.job_ids[-5:]))) if s.job_ids else None,
             ("Archived", Text("yes (hidden by default)", style="italic")) if s.archived else None,
             ("Note", Text(safe(s.history_note), style="yellow")) if s.history_note else None,
             ("Error", Text(safe(s.error), style="red")) if s.error else None,
@@ -806,7 +805,7 @@ class SessionBrowser(App):
     def _launch(self, session: Session, plan: native.LaunchPlan, mode: str) -> None:
         if not native.interactive_terminal():
             self.notify("Opening a native CLI needs an interactive terminal. "
-                        f"Preview with: ai-bridge sessions open {session.selector} --dry-run",
+                        f"Preview with: agentls sessions open {session.selector} --dry-run",
                         severity="error", markup=False, timeout=15)
             return
         try:
@@ -821,12 +820,12 @@ class SessionBrowser(App):
             return
         try:
             with self.suspend():
-                print(f"\n[ai-bridge] {safe(shlex.join(plan.argv))}\n"
-                      f"[ai-bridge] in {one_line(plan.cwd)} — exit the agent to return.\n",
+                print(f"\n[agentls] {safe(shlex.join(plan.argv))}\n"
+                      f"[agentls] in {one_line(plan.cwd)} — exit the agent to return.\n",
                       flush=True)
                 code = native.run(plan)
         except SuspendNotSupported:
-            self.notify("This terminal cannot be suspended here. Run: ai-bridge sessions open "
+            self.notify("This terminal cannot be suspended here. Run: agentls sessions open "
                         f"{session.selector}", severity="error", markup=False, timeout=15)
             return
         except native.PreflightError as error:
@@ -925,7 +924,7 @@ class SessionBrowser(App):
                         'Multiple roots run sequentially; partial completion is possible.')
         else:
             for target in stop.targets:
-                body.append(target.session.selector + (f' · bridge job {target.job_id}' if target.job_id else '') + '\n')
+                body.append(target.session.selector + '\n')
                 body.append('\n'.join(safe(d) for d in target.details) + '\n')
             if not stop.targets:
                 body.append('No verified live process found; nothing needs stopping.\n')
@@ -933,29 +932,13 @@ class SessionBrowser(App):
                         'no automatic SIGKILL. Shared daemons and unverifiable processes are refused. '
                         'Known descendant sessions are included. Files remain after Stop session. '
                         'Grouped actions may partially complete; refresh after any failure.')
-            if stop.bridge_cleanup:
-                body.append('\nBridge jobs use the installed server cancellation mechanism. A separate confirmation '
-                            'will authorize background descendant cleanup, which may escalate to SIGKILL under server policy.')
             if action == 'force':
                 body.append('\nQuarantine paths:\n' + '\n'.join(safe(p) for p in plan.paths) + '\n')
                 body.append('\nAfter stopping, Claude/Cursor files move to recoverable quarantine only if every ordinary '
                             'safeguard passes. Recent writes require waiting 120 seconds. Restore with t.')
         title = 'Stop session?' if action == 'stop' else 'Force delete?'
         screen = DeleteConfirmScreen(title, body, allowed=True)
-        def confirmed(ok):
-            if not ok:
-                return
-            if not native_force and stop.bridge_cleanup:
-                warning = Text('Authorize the installed server to stop these exact jobs and their verified background lineage:\n' +
-                               '\n'.join(t.session.selector + ' · job ' + t.job_id + '\n' +
-                                         '\n'.join(safe(d) for d in t.details) for t in stop.targets if t.job_id) +
-                               '\n\nServer cleanup may escalate to SIGKILL. Unsaved work can be lost. '
-                               'Shared daemons are refused. y authorizes this escalation; n cancels.')
-                self.push_screen(DeleteConfirmScreen('Confirm background cleanup / SIGKILL?', warning, allowed=True),
-                                 lambda yes: self.run_session_action(plan, action) if yes else None)
-            else:
-                self.run_session_action(plan, action)
-        self.push_screen(screen, confirmed)
+        self.push_screen(screen, lambda ok: self.run_session_action(plan, action) if ok else None)
 
     @work(thread=True, exclusive=True, group='action')
     def run_session_action(self, plan, action: str) -> None:
@@ -966,7 +949,7 @@ class SessionBrowser(App):
                 message = f'Native Codex force deletion confirmed for {len(removed)} root(s).'
             elif action == 'stop':
                 stopped = session_actions.execute_stop(plan)
-                message = f'Stopped {len(stopped)} session process/job(s); chat files retained.'
+                message = f'Stopped {len(stopped)} session process(es); chat files retained.'
             else:
                 result = session_actions.execute_quarantine(plan)
                 message = f"Quarantined {len(result['moved'])} session(s); restore with t."
@@ -1183,8 +1166,8 @@ class SessionBrowser(App):
 
 def run() -> int:
     if not native.interactive_terminal() or os.environ.get("TERM") == "dumb":
-        print("ai-bridge: the session browser needs an interactive, capable terminal; "
-              "use `ai-bridge sessions list`.", file=sys.stderr)
+        print("agentls: the session browser needs an interactive, capable terminal; "
+              "use `agentls sessions list`.", file=sys.stderr)
         return 2
     result = SessionBrowser().run()
     if isinstance(result, NativeHandoff):
@@ -1192,7 +1175,7 @@ def run() -> int:
             native.recheck(result.plan, result.session)
             native.exec_(result.plan)
         except (native.PreflightError, OSError) as error:
-            print(f"ai-bridge: native launch failed: {safe(error)}. "
-                  "Run ai-bridge to reopen the browser.", file=sys.stderr)
+            print(f"agentls: native launch failed: {safe(error)}. "
+                  "Run agentls to reopen the browser.", file=sys.stderr)
             return 1
     return 0

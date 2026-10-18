@@ -70,13 +70,13 @@ are never substituted. `p` shows the full value.
 
 | Status | Meaning |
 | --- | --- |
-| active | in use now: a verified bridge job, a live registered Claude process, a process holding the file open or locked, or one started with its ID |
-| uncertain | a bridge job is unfinished but its process cannot be verified |
+| active | in use now: a verified MCP job, a live registered Claude process, a process holding the file open or locked, or one started with its ID |
+| uncertain | an MCP job is unfinished but its process cannot be verified |
 | recent | modified in the last 2 minutes |
 | idle | none of the above |
 
-**Origin** (MCP / Direct / Unknown) is shown only from ai-bridge records; see
-[bridge.md](bridge.md#origin).
+**Origin** (MCP / Direct / Unknown) is shown only from ai-bridge MCP server records; see
+[mcp.md](mcp.md#origin).
 
 ## Headless commands
 
@@ -84,18 +84,18 @@ Output is a table on a terminal and JSON otherwise (`--json` / `--table` to forc
 non-terminal are JSON on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` partial.
 
 ```bash
-ai-bridge sessions list [--agent claude|codex|cursor ...] [--origin mcp|direct|unknown]
+agentls sessions list [--agent claude|codex|cursor ...] [--origin mcp|direct|unknown]
                         [--status active|uncertain|recent|idle] [--project DIR] [--search WORDS]
                         [--sort updated|title|agent|project] [--reverse]
                         [--archived hide|include|only] [--native-archived] [--all]
-                        [--mode ...] [--type ...] [--task-id ...] [--limit N] [--offset N]
-ai-bridge sessions inspect agent:UUID|ID-PREFIX [--history N]
-ai-bridge sessions open|resume|fork agent:UUID [--dry-run]
-ai-bridge sessions rename agent:UUID "New name" | --clear
-ai-bridge sessions archive|unarchive agent:UUID [...]
-ai-bridge sessions delete agent:UUID [...] --dry-run            # preview; prints a plan id
-ai-bridge sessions delete agent:UUID [...] --yes --plan-id ID   # run exactly that plan
-ai-bridge sessions trash list | restore BATCH|codex:UUID [--dry-run] | purge BATCH --yes
+                        [--mode ...] [--type ...] [--limit N] [--offset N]
+agentls sessions inspect agent:UUID|ID-PREFIX [--history N]
+agentls sessions open|resume|fork agent:UUID [--dry-run]
+agentls sessions rename agent:UUID "New name" | --clear
+agentls sessions archive|unarchive agent:UUID [...]
+agentls sessions delete agent:UUID [...] --dry-run            # preview; prints a plan id
+agentls sessions delete agent:UUID [...] --yes --plan-id ID   # run exactly that plan
+agentls sessions trash list | restore BATCH|codex:UUID [--dry-run] | purge BATCH --yes
 ```
 
 Selectors are `agent:UUID`. `inspect` also accepts a unique ID prefix of 8+ characters; anything

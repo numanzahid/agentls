@@ -3,7 +3,7 @@
 Per agent:
 * claude, cursor: "quarantine". Every file/dir that makes up the session is
   renamed (same filesystem, atomic, no-replace) into a private batch under
-  $AI_BRIDGE_CLI_DATA_DIR/trash/<batch>/ and can be restored.
+  $AGENTLS_DATA_DIR/trash/<batch>/ and can be restored.
 * codex: "codex-archive". Rollout files are indexed by Codex's SQLite state, so
   they are never moved or removed by this tool; the installed `codex archive`
   does it (and `codex unarchive` restores). The separate TUI-only permanent
@@ -14,7 +14,7 @@ Safety model
   ctime); directories also get a bounded recursive fingerprint of every object
   inside (no symlink following), so in-place store.db/WAL writes or nested
   file changes are detected. Anything modified within RECENT_SECONDS, sessions
-  in use or with unfinished/unreadable bridge jobs, and any incomplete
+  in use or with unfinished/unreadable MCP jobs, and any incomplete
   process inspection block the plan (fail closed).
 * Execute: re-plans from scratch and requires the same plan ID, then for each
   session takes a fresh process snapshot and, immediately before each rename,
@@ -42,7 +42,7 @@ from pathlib import Path
 
 from . import activity as activity_mod
 from . import paths
-from .bridge import BridgeState, uncertain
+from .mcp import McpState, uncertain
 from .fsutil import (TreeTooLarge, UnsafePath, atomic_write_json, ensure_private_dir, file_lock, fsync_dir,
                      identity, lstat_at, pinned_parent, read_bytes_nofollow, relative_parts, rename_noreplace,
                      tree_fingerprint)
@@ -55,8 +55,8 @@ from .textsafe import is_uuid
 SCHEMA = 2
 METHODS = {"claude": "quarantine", "cursor": "quarantine", "codex": "codex-archive"}
 SUPPORT_NOTES = {
-    "claude": "Moved to the ai-bridge-cli trash (transcript, sidecar folder, file-history, session-env); restorable.",
-    "cursor": "Chat folder (store.db + WAL) and agent transcripts moved to the ai-bridge-cli trash; restorable.",
+    "claude": "Moved to the agentls trash (transcript, sidecar folder, file-history, session-env); restorable.",
+    "cursor": "Chat folder (store.db + WAL) and agent transcripts moved to the agentls trash; restorable.",
     "codex": "Archived with the installed `codex archive` (keeps Codex's SQLite index consistent); "
              "restorable with `codex unarchive`. Rollout files are never touched directly.",
 }
@@ -204,7 +204,7 @@ def _check_entry(path: Path, root: Path, required: bool, now: float, trash_dev: 
 
 
 def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_dev: int | None,
-               bridge: BridgeState, jobs: dict, allow_uninspectable: bool,
+               mcp: McpState, jobs: dict, allow_uninspectable: bool,
                *, codex_permanent: bool = False) -> Item:
     item = Item(agent=session.agent, session_id=session.session_id, title=session.display_title,
                 method=METHODS[session.agent])
@@ -231,13 +231,13 @@ def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_d
     busy = sorted({*session.active_job_ids,
                    *(j["id"] for j in jobs.get((session.agent, session.session_id.lower()), []) if uncertain(j))})
     if busy:
-        item.blockers.append(f"Bridge job(s) still unfinished: {', '.join(busy)}")
-    if bridge.problems:
-        item.blockers.append(f"{len(bridge.problems)} bridge job record(s) unreadable; a running job "
+        item.blockers.append(f"MCP job(s) still unfinished: {', '.join(busy)}")
+    if mcp.problems:
+        item.blockers.append(f"{len(mcp.problems)} MCP job record(s) unreadable; a running job "
                              "cannot be ruled out.")
-    orphans = sorted(j["id"] for j in bridge.unattributed() if j.get("agent") == session.agent)
+    orphans = sorted(j["id"] for j in mcp.unattributed() if j.get("agent") == session.agent)
     if orphans:
-        item.blockers.append(f"Unfinished {session.agent} bridge job(s) with no known session yet: "
+        item.blockers.append(f"Unfinished {session.agent} MCP job(s) with no known session yet: "
                              f"{', '.join(orphans)}")
     root = Path(session.storage_root)
     if os.path.realpath(root) != os.path.realpath(paths.agent_root(session.agent)):
@@ -272,12 +272,12 @@ def _plan_id(items: list[Item], allow_uninspectable: bool) -> str:
 def build_plan(sessions: list[Session], act: activity_mod.Activity | None = None,
                allow_uninspectable: bool = False) -> DeletePlan:
     act = act or activity_mod.snapshot()
-    bridge = BridgeState()
+    mcp = McpState()
     try:
-        jobs = bridge.session_jobs()  # fresh, not the catalog's refresh-time view
-    except Exception as error:  # fail closed: unknown bridge state blocks everything
+        jobs = mcp.session_jobs()  # fresh, not the catalog's refresh-time view
+    except Exception as error:  # fail closed: unknown MCP state blocks everything
         jobs = {}
-        bridge.problems = [f"bridge state unreadable: {error}"]
+        mcp.problems = [f"MCP state unreadable: {error}"]
     now = time.time()
     trash_dev = _device_of(paths.trash_dir())
     seen, items = set(), []
@@ -285,7 +285,7 @@ def build_plan(sessions: list[Session], act: activity_mod.Activity | None = None
         if session.key in seen:
             continue
         seen.add(session.key)
-        items.append(_plan_item(session, act, now, trash_dev, bridge, jobs, allow_uninspectable))
+        items.append(_plan_item(session, act, now, trash_dev, mcp, jobs, allow_uninspectable))
     return DeletePlan(items=items, plan_id=_plan_id(items, allow_uninspectable), sessions=list(sessions),
                       allow_uninspectable=allow_uninspectable)
 
@@ -555,7 +555,7 @@ def _load_manifest(batch_id: str) -> tuple[Path, dict]:
             root = Path(entry["root"])
             if os.path.realpath(root) != os.path.realpath(paths.agent_root(item["agent"])):
                 raise ValueError(f"Manifest root {root} is not the configured {item['agent']} store; "
-                                 "set the same CLAUDE_CONFIG_DIR/CODEX_HOME/AI_BRIDGE_CURSOR_HOME as when deleting.")
+                                 "set the same CLAUDE_CONFIG_DIR/CODEX_HOME/AGENTLS_CURSOR_HOME as when deleting.")
             relative_parts(Path(entry["path"]), root)
             if not re.fullmatch(r"\d{1,4}", str(entry.get("stored", ""))):
                 raise ValueError("Corrupt trash manifest entry.")

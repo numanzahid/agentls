@@ -7,10 +7,10 @@ from dataclasses import replace
 import pytest
 from conftest import CODEX_ID
 
-from ai_bridge_cli import activity, trash
-from ai_bridge_cli.catalog import Catalog
-from ai_bridge_cli.fsutil import UnsafePath
-from ai_bridge_cli.tui import process_delete as stop
+from agentls import activity, trash
+from agentls.catalog import Catalog
+from agentls.fsutil import UnsafePath
+from agentls.tui import process_delete as stop
 
 
 @pytest.fixture
@@ -89,7 +89,7 @@ def test_sigterm_then_native_archive(process, populated):
 
 
 @pytest.mark.parametrize('case', ['extra-file', 'cross-chat', 'mcp', 'other-agent', 'wrong-session',
-                                  'recent', 'multi-select', 'shared', 'incomplete', 'bridge-job', 'lock'])
+                                  'recent', 'multi-select', 'shared', 'incomplete', 'mcp-job', 'lock'])
 def test_safe_refusals(process, populated, monkeypatch, case):
     session, launch = process
     extra = None
@@ -110,7 +110,7 @@ def test_safe_refusals(process, populated, monkeypatch, case):
         sessions.append(Catalog().refresh(probe_activity=False).get('claude', '5c1f0e2a-7b3d-4c9e-8a61-2f4d9b0c7e13'))
     if case == 'shared':
         launch()
-    if case == 'bridge-job':
+    if case == 'mcp-job':
         sessions = [replace(session, active_job_ids=['running'])]
     if case in ('incomplete', 'lock'):
         act = activity.snapshot()
@@ -217,7 +217,7 @@ def test_identity_rechecked_after_pidfd_open(process, monkeypatch):
 def test_active_process_tui_flow(process, populated, answer):
     from test_tui import drive, keys, settle
 
-    from ai_bridge_cli.tui import screens
+    from agentls.tui import screens
 
     session, launch = process
     child = launch()

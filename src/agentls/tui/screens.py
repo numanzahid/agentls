@@ -290,10 +290,10 @@ class HelpScreen(Dialog):
                 table.add_row(key, text)
             table.add_row("", "")
         legend = Text.assemble(
-            ("Origin  ", "bold"), ("MCP", "magenta bold"), " verified bridge provenance record · ",
+            ("Origin  ", "bold"), ("MCP", "magenta bold"), " verified MCP provenance record · ",
             ("Direct", "bold"), " no record · ", ("Unknown", "dim"), " cannot verify\n",
             ("Status  ", "bold"), ("active", "green"), " in use · ", ("uncertain", "yellow"),
-            " bridge job unverifiable · ", ("recent", "cyan"), " modified <2 min · idle\n",
+            " MCP job unverifiable · ", ("recent", "cyan"), " modified <2 min · idle\n",
             ("Title  ", "bold"), ("⚙", "dim"), " non-interactive (codex exec, claude -p) chat, hidden by default; "
             "change with Filters → Mode · ", ("↳", "dim"), " subagent\n",
             ("Last Model  ", "bold"), "last known model recorded in this chat; — = unknown. "

@@ -12,9 +12,9 @@ import pytest
 from conftest import CODEX_ID
 from rich.console import Console
 
-from ai_bridge_cli import activity, codex_idle, trash
-from ai_bridge_cli.catalog import Catalog
-from ai_bridge_cli.fsutil import UnsafePath
+from agentls import activity, codex_idle, trash
+from agentls.catalog import Catalog
+from agentls.fsutil import UnsafePath
 
 
 @pytest.fixture
@@ -192,7 +192,7 @@ def test_final_recheck_after_journal_blocks_writer(managed, monkeypatch, populat
 
 
 def test_ui_explains_managed_archive_and_blockers(managed):
-    from ai_bridge_cli.tui.screens import plan_table
+    from agentls.tui.screens import plan_table
     session, _, _, thread, *_ = managed
     console = Console(width=100, record=True)
     console.print(plan_table(trash.build_plan([session]).to_json()))
@@ -205,9 +205,9 @@ def test_ui_explains_managed_archive_and_blockers(managed):
 @pytest.fixture
 def native_store(tmp_path, monkeypatch):
     """Explicit opt-in native CLI; never inherit the user's Codex home/config."""
-    binary = os.environ.get('AI_BRIDGE_TEST_CODEX')
+    binary = os.environ.get('AGENTLS_TEST_CODEX')
     if not binary:
-        pytest.skip('Set AI_BRIDGE_TEST_CODEX to test the installed native Codex in a temporary home')
+        pytest.skip('Set AGENTLS_TEST_CODEX to test the installed native Codex in a temporary home')
     binary = str(Path(binary).resolve(strict=True))
     root = tmp_path / 'isolated-native'
     root.mkdir()
@@ -382,7 +382,7 @@ def test_allow_uninspectable_does_not_bypass_unknown_holder(managed):
 def test_tui_managed_idle_uses_ordinary_archive_confirmation(managed, populated):
     from test_tui import drive, keys, settle
 
-    from ai_bridge_cli.tui import screens
+    from agentls.tui import screens
 
     session, child, *_ = managed
     async def scenario(app, pilot):
@@ -418,7 +418,7 @@ def test_daemon_binary_must_match_native_archiver(managed, populated, monkeypatc
 
 
 def test_binary_change_during_hash_is_refused(tmp_path, monkeypatch):
-    from ai_bridge_cli.fsutil import identity
+    from agentls.fsutil import identity
     binary = tmp_path / 'binary'
     binary.write_bytes(b'synthetic binary fixture')
     original = codex_idle.hashlib.file_digest

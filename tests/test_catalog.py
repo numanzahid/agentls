@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 
@@ -6,9 +5,9 @@ import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli.bridge import process_identity
-from ai_bridge_cli.catalog import Catalog, Query
-from ai_bridge_cli.overlay import Overlays
+from agentls.mcp import process_identity
+from agentls.catalog import Catalog, Query
+from agentls.overlay import Overlays
 
 
 def catalog():
@@ -51,7 +50,7 @@ def test_origin_from_provenance(populated):
     c = catalog()
     assert ids(c.query(Query(origin="mcp"))) == [CODEX_ID]
     assert c.get("claude", CLAUDE_ID).origin == "direct"
-    assert c.get("codex", CODEX_ID).to_json()["bridge_origin"] == "mcp"
+    assert c.get("codex", CODEX_ID).to_json()["origin"] == "mcp"
 
 
 def test_resolve_selectors(populated):
@@ -88,23 +87,7 @@ def test_alias_and_archive_overlay(populated):
     assert "My alias" not in next(populated.claude.rglob(f"{CLAUDE_ID}.jsonl")).read_text()
 
 
-def test_legacy_server_overlay_is_read_only_fallback(populated):
-    legacy = populated.state / "management" / "sessions"
-    legacy.mkdir(parents=True, mode=0o700)
-    os.chmod(populated.state, 0o700)
-    path = legacy / (hashlib.sha256(f"claude:{CLAUDE_ID}".encode()).hexdigest() + ".json")
-    path.write_text(json.dumps({"alias": "Old alias", "archived": True}))
-    os.chmod(path, 0o600)
-    before = path.read_bytes()
-    s = catalog().get("claude", CLAUDE_ID)
-    assert s.alias == "Old alias" and s.archived
-    Overlays().update([("claude", CLAUDE_ID)], archived=False)
-    s = catalog().get("claude", CLAUDE_ID)
-    assert s.alias == "Old alias" and not s.archived  # own value wins
-    assert path.read_bytes() == before
-
-
-def test_bridge_job_status(populated):
+def test_mcp_job_status(populated):
     write_job(populated, "1018-000001-aaaaaa", CLAUDE_ID, pid=os.getpid(), identity=process_identity(os.getpid()))
     write_job(populated, "1018-000002-bbbbbb", CURSOR_ID, agent="cursor")  # legacy: no identity
     write_job(populated, "1018-000003-cccccc", CODEX_ID, agent="codex", pid=999999999,
@@ -117,19 +100,19 @@ def test_bridge_job_status(populated):
     assert ids(c.query(Query(status="active"))) == [CLAUDE_ID]
 
 
-def test_bridge_state_is_never_modified(populated):
+def test_mcp_state_is_never_modified(populated):
     path = write_job(populated, "1018-000001-aaaaaa", CLAUDE_ID, pid=999999999,
                      identity={"boot_id": "x", "start_ticks": "1", "pgid": 1})
     before = (path.read_bytes(), path.stat().st_mtime_ns, sorted(os.listdir(path.parent)))
     catalog()
-    from ai_bridge_cli.bridge import BridgeState
-    BridgeState().job("1018-000001-aaaaaa")
+    from agentls.mcp import McpState
+    McpState().jobs()
     assert (path.read_bytes(), path.stat().st_mtime_ns, sorted(os.listdir(path.parent))) == before
     assert not (populated.state / "management").exists()
 
 
 def test_store_errors_do_not_hide_other_agents(populated, monkeypatch):
-    from ai_bridge_cli.scanners import cursor
+    from agentls.scanners import cursor
     monkeypatch.setattr(cursor, "chat_dirs", lambda root=None: (_ for _ in ()).throw(RuntimeError("boom")))
     c = catalog()
     assert "cursor" in c.errors and c.get("claude", CLAUDE_ID)

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import activity, paths, trash
-from .bridge import BridgeState
+from .mcp import McpState
 from .fsutil import UnsafePath, identity, not_writable_by_others, pinned_parent, lstat_at, read_json_nofollow
 from .model import Session
 from .native import find_binary, native_env, storage_safe
@@ -243,11 +243,11 @@ def prepare(session: Session) -> PermanentPlan:
         affected = expanded
     related = [s for s in rows if s.session_id in affected]
     act = activity.snapshot()
-    bridge = BridgeState()
-    jobs = bridge.session_jobs()
+    mcp = McpState()
+    jobs = mcp.session_jobs()
     proofs = []
     for row in related:
-        item = trash._plan_item(row, act, time.time(), None, bridge, jobs, False, codex_permanent=True)
+        item = trash._plan_item(row, act, time.time(), None, mcp, jobs, False, codex_permanent=True)
         if item.blockers:
             raise UnsafePath(f'{row.selector}: ' + '; '.join(item.blockers))
         # Archive's stale-handle exemption relies on archive-specific writer-lock
@@ -325,15 +325,15 @@ def prepare_force(sessions: list[Session]) -> ForcePlan:
     if len(related) != len(affected):
         raise UnsafePath('Ambiguous descendant UUIDs; refresh and inspect the native inventory.')
     act = activity.snapshot()
-    state = BridgeState()
-    bridge_note = None
+    state = McpState()
+    mcp_note = None
     try:
         jobs = state.session_jobs()
         if state.problems:
-            bridge_note = 'Bridge job inventory incomplete; native Codex decides deletion safety.'
+            mcp_note = 'MCP job inventory incomplete; native Codex decides deletion safety.'
     except (OSError, ValueError):
         jobs = {}
-        bridge_note = 'Bridge job inventory unavailable; native Codex decides deletion safety.'
+        mcp_note = 'MCP job inventory unavailable; native Codex decides deletion safety.'
     proofs, processes = [], set()
     for row in related:
         if row.error:
@@ -355,7 +355,7 @@ def prepare_force(sessions: list[Session]) -> ForcePlan:
         for job in jobs.get(('codex', row.session_id.lower()), []):
             if job.get('status') not in ('running', 'cleanup_incomplete', 'lost'):
                 continue
-            view = state.job_view(job, detail=True)
+            view = state.lineage_view(job)
             recorded = [(view.get('runner_pid'), view.get('runner_identity_verified')),
                         (view.get('target_pid'), view.get('target_identity_verified'))]
             recorded.extend((d['pid'], d['identity_verified']) for d in view.get('observed_descendants', []))
@@ -365,10 +365,10 @@ def prepare_force(sessions: list[Session]) -> ForcePlan:
                     continue
                 if verified:
                     pids.add(pid)
-                processes.add(f"{row.selector}: bridge job {job['id']} · saved PID {pid} · " +
+                processes.add(f"{row.selector}: MCP job {job['id']} · saved PID {pid} · " +
                               ('verified live lineage' if verified else 'not verified live; never signalled by this action'))
             if view.get('process_record') == 'unreadable':
-                bridge_note = 'Bridge process lineage unreadable; native Codex decides deletion safety.'
+                mcp_note = 'MCP process lineage unreadable; native Codex decides deletion safety.'
         for pid in sorted(pids):
             try:
                 cmd = one_line((activity.PROC / str(pid) / 'cmdline').read_bytes()
@@ -407,7 +407,7 @@ def prepare_force(sessions: list[Session]) -> ForcePlan:
         if not covered:
             roots.append(session)
     return ForcePlan(tuple(roots), tuple(related), root, binary, fingerprint,
-                     tuple(sorted(processes)), '; '.join(n for n in (act.incompleteness(), bridge_note) if n) or None,
+                     tuple(sorted(processes)), '; '.join(n for n in (act.incompleteness(), mcp_note) if n) or None,
                      tuple(selected.values()))
 
 

@@ -1,6 +1,6 @@
 """READ-ONLY reader for the MCP server's session provenance records.
 
-Contract (owned by the ai-bridge server):
+Contract (owned by the ai-bridge MCP server):
     $AI_BRIDGE_STATE_DIR/management/provenance/<sha256(agent + ':' + session_id)>.json
     {"schema": 1, "agent": ..., "session_id": ..., "origin": "mcp",
      "first_seen": <epoch>, "job_ids": [...]}
@@ -49,13 +49,13 @@ def validate(row, agent: str, session_id: str) -> dict:
 class ProvenanceReader:
     """Open the directory once per refresh; look up many sessions cheaply.
 
-    state: "ok" (directory verified), "absent_bridge" (no bridge state at all),
-    "missing" (bridge state exists but no provenance directory), "unsafe".
+    state: "ok" (directory verified), "absent_mcp" (no MCP server state at all),
+    "missing" (MCP state exists but no provenance directory), "unsafe".
     """
 
     def __init__(self, state_dir: Path | None = None, install_root: Path | None = None):
-        self.state_dir = Path(state_dir or paths.bridge_state_dir()).absolute()
-        self.install_root = Path(install_root or paths.bridge_install_root()).absolute()
+        self.state_dir = Path(state_dir or paths.mcp_state_dir()).absolute()
+        self.install_root = Path(install_root or paths.mcp_install_root()).absolute()
         self.fd: int | None = None
         self.state = "missing"
         self.note: str | None = None
@@ -82,14 +82,14 @@ class ProvenanceReader:
     def open(self):
         if self._absent(self.state_dir):
             if self._absent(self.install_root):
-                self.state = "absent_bridge"
-                self.note = "No ai-bridge state or installation on this account."
+                self.state = "absent_mcp"
+                self.note = "No ai-bridge MCP server state or installation on this account."
             else:
                 self.state = "missing"
-                self.note = "ai-bridge is installed but has no state directory; origin cannot be verified."
+                self.note = "The ai-bridge MCP server is installed but has no state directory; origin cannot be verified."
             return
         if os.path.islink(self.state_dir):
-            self.state, self.note = "unsafe", "Bridge state directory is a symlink."
+            self.state, self.note = "unsafe", "MCP state directory is a symlink."
             return
         parts = (*self.state_dir.parts[1:], "management", "provenance")
         if ".." in parts:
@@ -103,7 +103,7 @@ class ProvenanceReader:
                                     dir_fd=fd)
                 except FileNotFoundError:
                     self.state = "missing"
-                    self.note = ("The bridge has not recorded MCP provenance on this account "
+                    self.note = ("The MCP server has not recorded provenance on this account "
                                  "(none yet, or the server predates provenance records).")
                     return
                 except OSError as error:
@@ -142,19 +142,19 @@ class ProvenanceReader:
                 continue
 
     def lookup(self, agent: str, session_id: str, created: float | None = None,
-               bridge_referenced: bool = False, jobs_complete: bool = True) -> tuple[str, dict | None, str | None]:
+               mcp_referenced: bool = False, jobs_complete: bool = True) -> tuple[str, dict | None, str | None]:
         """(origin, record, note) with origin in mcp|direct|unknown.
 
         Direct must be *proven*; a missing record alone is not proof (sessions
         used through MCP before the server recorded provenance have none):
-        * no ai-bridge state or installation exists on this account, or
+        * no ai-bridge MCP state or installation exists on this account, or
         * no record, the session was created after the provenance epoch (the
-          earliest verified first_seen, i.e. recording was active), no bridge
-          job references it, and every bridge job record could be read.
+          earliest verified first_seen, i.e. recording was active), no MCP
+          job references it, and every MCP job record could be read.
         """
         if not is_uuid(session_id) or agent not in paths.AGENTS:
             return "unknown", None, "Session ID is not an exact UUID."
-        if self.state == "absent_bridge":
+        if self.state == "absent_mcp":
             return "direct", None, self.note
         if self.state != "ok" or self.fd is None:
             return "unknown", None, self.note
@@ -166,10 +166,10 @@ class ProvenanceReader:
             except (UnsafePath, OSError, ValueError) as error:  # incl. vanished/dangling: not "missing"
                 return "unknown", None, f"Provenance record rejected: {error}"
             return "mcp", row, "Verified MCP provenance record."
-        if bridge_referenced:
-            return "unknown", None, "No provenance record, but bridge jobs reference this session."
+        if mcp_referenced:
+            return "unknown", None, "No provenance record, but MCP jobs reference this session."
         if not jobs_complete:
-            return "unknown", None, "No provenance record; some bridge job records are unreadable."
+            return "unknown", None, "No provenance record; some MCP job records are unreadable."
         if self.epoch is None:
             return "unknown", None, "No provenance record, and recording has never been verified on this account."
         if created is None or created <= self.epoch:

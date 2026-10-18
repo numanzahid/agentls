@@ -1,17 +1,8 @@
 """Launcher management for install.sh (stdlib only; runnable as a plain script).
 
-Installs ~/.local/bin/ai-bridge-cli and ~/.local/bin/ai-bridge as tiny shell
-launchers into this tool's own virtualenv. Ownership is recorded in
-$DATA/launchers.json (path -> sha256). An existing ~/.local/bin/ai-bridge is
-replaced only if it is:
-  * a launcher this tool installed (hash matches our record), or
-  * the ai-bridge server's launcher: its own ownership record
-    (~/.local/share/ai-bridge/.cli-launcher.json) must match path, uid and
-    sha256, AND the hash must be a known server launcher (or
-    --accept-main-record is given). The original is backed up first and can
-    be restored with `install.sh --rollback`. The server's record is left
-    untouched, so after a rollback it matches again.
-Anything else is left alone and reported.
+Installs ~/.local/bin/agentls, a tiny shell launcher into this tool's own
+virtualenv. Ownership is recorded in $DATA/launchers.json (path -> sha256); an
+existing file there that this tool did not install is never replaced.
 
 Transactions: every mutating command holds an exclusive lock
 ($DATA/.install.lock). `activate` runs a read-only preflight, swaps the staged
@@ -37,16 +28,11 @@ import shlex
 import stat
 import sys
 import tempfile
-import time
 from pathlib import Path
 
-# sha256 of launchers shipped by the ai-bridge server (`ai-bridge` script).
-KNOWN_MAIN_LAUNCHERS = {
-    "f446464d96edd768a61934b298c2e2c28e49f4e812e56ad1816aa2bd64c86768",
-}
-MARKER = "# ai-bridge-cli launcher"
+MARKER = "# agentls launcher"
 MAX_LAUNCHER = 16384
-NAMES = ("ai-bridge-cli", "ai-bridge")
+NAMES = ("agentls",)
 
 
 class Refusal(ValueError):
@@ -98,10 +84,8 @@ class Layout:
     def __init__(self, home: Path, data_dir: Path | None = None):
         self.home = Path(home).resolve(strict=True)
         self.bin = self.home / ".local/bin"
-        self.data = Path(data_dir or self.home / ".local/share/ai-bridge-cli").absolute()
+        self.data = Path(data_dir or self.home / ".local/share/agentls").absolute()
         self.record = self.data / "launchers.json"
-        self.backups = self.data / "backups"
-        self.main_record = self.home / ".local/share/ai-bridge/.cli-launcher.json"
         self.venv = self.data / "venv"
         self.previous = self.data / "venv.previous"
         self.lock = self.data / ".install.lock"
@@ -112,10 +96,9 @@ def launcher_bytes(python: Path, prog: str) -> bytes:
     # venv/libexec/<prog> is a symlink to the venv python, so the process is named
     # after the command (tmux window names, ps); older venvs without it use python.
     named = python.parent.parent / "libexec" / prog
-    return (f"#!/bin/sh\n{MARKER} ({prog}); managed by ai-bridge-cli install.sh - do not edit.\n"
-            f"AI_BRIDGE_CLI_PROG={prog}\nexport AI_BRIDGE_CLI_PROG\n"
+    return (f"#!/bin/sh\n{MARKER} ({prog}); managed by agentls install.sh - do not edit.\n"
             f"PY={shlex.quote(str(named))}\n[ -x \"$PY\" ] || PY={shlex.quote(str(python))}\n"
-            f"exec \"$PY\" -I -m ai_bridge_cli \"$@\"\n").encode()
+            f"exec \"$PY\" -I -m agentls \"$@\"\n").encode()
 
 
 def _fault(point: str) -> None:
@@ -131,7 +114,7 @@ def install_lock(layout: Layout):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise Refusal("Another ai-bridge-cli install/rollback is running; nothing was changed.") from None
+            raise Refusal("Another agentls install/rollback is running; nothing was changed.") from None
         yield
     finally:
         os.close(fd)
@@ -179,8 +162,8 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
-def classify(layout: Layout, target: Path, uid: int, record: dict, accept_main_record: bool) -> dict:
-    """What is currently at target: absent | ours | main | foreign (with reason)."""
+def classify(layout: Layout, target: Path, uid: int, record: dict) -> dict:
+    """What is currently at target: absent | ours | foreign (with reason)."""
     if not target.exists() and not target.is_symlink():
         return {"state": "absent"}
     if target.is_symlink():
@@ -191,31 +174,11 @@ def classify(layout: Layout, target: Path, uid: int, record: dict, accept_main_r
         return {"state": "foreign", "reason": str(error)}
     digest = sha256(data)
     identity = (info.st_dev, info.st_ino, digest)
-    pending = record.get("pending", {}).get(str(target)) or {}
-    # A journaled-but-uncommitted publish of OUR launcher (interrupted run) is still ours;
-    # an interrupted rollback journals the server's bytes, which must never count as ours.
-    ours_pending = pending.get("new") if not pending.get("restore") else None
-    if digest in (record["launchers"].get(str(target)), ours_pending):
+    # A journaled-but-uncommitted publish of OUR launcher (interrupted run) is still ours.
+    pending = (record.get("pending", {}).get(str(target)) or {}).get("new")
+    if digest in (record["launchers"].get(str(target)), pending):
         return {"state": "ours", "sha256": digest, "identity": identity, "data": data}
-    if target.name == "ai-bridge":
-        try:
-            main_data, main_info = read_regular(layout.main_record, uid, 8192)
-            main = json.loads(main_data)
-        except FileNotFoundError:
-            main = None
-        except (Refusal, OSError, ValueError) as error:
-            return {"state": "foreign", "reason": f"server launcher record unusable: {error}"}
-        if main is not None:
-            if main_info.st_mode & 0o077:
-                return {"state": "foreign", "reason": "server launcher record is not private"}
-            if (main.get("schema"), main.get("uid"), main.get("path"), main.get("sha256")) != (
-                    1, uid, str(target), digest):
-                return {"state": "foreign", "reason": "server launcher record does not match this file"}
-            if digest not in KNOWN_MAIN_LAUNCHERS and not accept_main_record:
-                return {"state": "foreign", "reason": "server-registered launcher with an unknown hash "
-                                                      "(re-run with --accept-main-record to trust its record)"}
-            return {"state": "main", "sha256": digest, "identity": identity, "data": data, "main_record": main}
-    return {"state": "foreign", "reason": "not installed by ai-bridge-cli or a verified ai-bridge server launcher"}
+    return {"state": "foreign", "reason": "not installed by agentls"}
 
 
 def _publish(target: Path, data: bytes, expected: tuple | None) -> tuple:
@@ -251,19 +214,6 @@ def _unpublish(target: Path, expected: tuple) -> None:
     _fsync_dir(target.parent)
 
 
-def backup(layout: Layout, target: Path, state: dict) -> Path:
-    layout.backups.mkdir(mode=0o700, parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    folder = layout.backups / f"{stamp}-{secrets.token_hex(3)}-{target.name}"  # sorts by time
-    folder.mkdir(mode=0o700)
-    write_atomic(folder / target.name, state["data"], 0o700)
-    meta = {"schema": 1, "original_path": str(target), "sha256": state["sha256"],
-            "source": "ai-bridge server launcher", "main_record": state.get("main_record"),
-            "replaced_at": time.time()}
-    write_atomic(folder / "backup.json", (json.dumps(meta, indent=1) + "\n").encode(), 0o600)
-    return folder
-
-
 def reconcile(layout: Layout, uid: int) -> dict:
     """Finish or drop journal entries left by an interrupted run (caller holds the lock)."""
     record = load_record(layout, uid)
@@ -275,55 +225,41 @@ def reconcile(layout: Layout, uid: int) -> dict:
         except (Refusal, OSError):
             digest = None
         if digest is not None and digest == pending.get("new"):
-            if pending.get("restore"):
-                record["launchers"].pop(key, None)   # server launcher is back
-            else:
-                record["launchers"][key] = digest    # our publish landed
+            record["launchers"][key] = digest        # our publish landed
         record["pending"].pop(key)                   # otherwise it never landed
     save_record(layout, record)
     return record
 
 
-def plan_launchers(layout: Layout, python: Path, uid: int, *, replace_ai_bridge: bool = True,
-                   accept_main_record: bool = False) -> tuple[dict, list]:
-    """Read-only: what install would do. Raises Refusal if ai-bridge-cli cannot be installed."""
+def plan_launchers(layout: Layout, python: Path, uid: int) -> tuple[dict, list]:
+    """Read-only: what install would do. Raises Refusal if agentls cannot be installed."""
     if layout.bin.exists() or layout.bin.is_symlink():
         safe_dir(layout.bin, uid)
     record = load_record(layout, uid)
-    report = {"installed": [], "updated": [], "replaced_server_launcher": [], "unchanged": [],
-              "skipped": [], "backups": []}
+    report = {"installed": [], "updated": [], "unchanged": []}
     actions = []
     for name in NAMES:
         target = layout.bin / name
         data = launcher_bytes(python, name)
-        state = classify(layout, target, uid, record, accept_main_record)
+        state = classify(layout, target, uid, record)
         if state["state"] == "ours" and state["sha256"] == sha256(data):
             report["unchanged"].append(str(target))
             continue
         if state["state"] == "foreign":
-            if name == "ai-bridge-cli":
-                raise Refusal(f"{target} exists and is not ours ({state['reason']}); nothing was changed.")
-            report["skipped"].append({"path": str(target), "reason": state["reason"]})
-            continue
-        if state["state"] == "main" and not replace_ai_bridge:
-            report["skipped"].append({"path": str(target), "reason": "server launcher kept (--no-replace-ai-bridge)"})
-            continue
-        report[{"absent": "installed", "ours": "updated", "main": "replaced_server_launcher"}[state["state"]]].append(
-            str(target))
+            raise Refusal(f"{target} exists and is not ours ({state['reason']}); nothing was changed.")
+        report["installed" if state["state"] == "absent" else "updated"].append(str(target))
         actions.append((target, data, state))
     return report, actions
 
 
-def install(layout: Layout, python: Path, uid: int, *, replace_ai_bridge: bool = True,
-            accept_main_record: bool = False, dry_run: bool = False) -> dict:
+def install(layout: Layout, python: Path, uid: int, *, dry_run: bool = False) -> dict:
     """Publish launchers transactionally (caller holds the install lock unless dry_run)."""
     if not python.is_absolute() or (not dry_run and not os.access(python, os.X_OK)):
         raise Refusal(f"Virtualenv interpreter is not executable: {python}")
     if not dry_run:
         layout.data.mkdir(mode=0o700, parents=True, exist_ok=True)
         reconcile(layout, uid)
-    report, actions = plan_launchers(layout, python, uid, replace_ai_bridge=replace_ai_bridge,
-                                     accept_main_record=accept_main_record)
+    report, actions = plan_launchers(layout, python, uid)
     report["dry_run"] = dry_run
     if dry_run or not actions:
         return report
@@ -335,8 +271,6 @@ def install(layout: Layout, python: Path, uid: int, *, replace_ai_bridge: bool =
     try:
         for target, data, state in actions:
             key = str(target)
-            if state["state"] == "main":
-                report["backups"].append(str(backup(layout, target, state)))
             previous_value = record["launchers"].get(key)
             record["pending"][key] = {"new": sha256(data), "old": state.get("sha256")}
             save_record(layout, record)   # journal before publishing
@@ -378,12 +312,12 @@ def _undo_launchers(layout: Layout, uid: int, record: dict, done: list) -> None:
 
 def _run_version(python: Path) -> None:
     try:
-        proc = subprocess.run([str(python), "-I", "-m", "ai_bridge_cli", "--version"], capture_output=True,
+        proc = subprocess.run([str(python), "-I", "-m", "agentls", "--version"], capture_output=True,
                               text=True, timeout=120, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as error:
-        raise Refusal(f"{python} could not run ai_bridge_cli: {error}") from None
+        raise Refusal(f"{python} could not run agentls: {error}") from None
     if proc.returncode != 0 or not proc.stdout.strip():
-        raise Refusal(f"{python} could not run ai_bridge_cli: {(proc.stderr or proc.stdout).strip()[-300:]}")
+        raise Refusal(f"{python} could not run agentls: {(proc.stderr or proc.stdout).strip()[-300:]}")
 
 
 def _venv_slot(path: Path, uid: int) -> bool:
@@ -469,8 +403,7 @@ def _prepare_venvs(layout: Layout, uid: int) -> None:
         _fsync_dir(layout.data)
 
 
-def activate(layout: Layout, stage: Path, uid: int, *, replace_ai_bridge: bool = True,
-             accept_main_record: bool = False) -> dict:
+def activate(layout: Layout, stage: Path, uid: int) -> dict:
     """Activate a staged venv with a durable, restartable undo plan."""
     stage = Path(stage).absolute()
     if stage.parent != layout.data or not stage.name.startswith("venv.staging-"):
@@ -479,8 +412,7 @@ def activate(layout: Layout, stage: Path, uid: int, *, replace_ai_bridge: bool =
         _prepare_venvs(layout, uid)
         safe_dir(stage, uid)
         future = layout.venv / "bin/python"
-        plan_launchers(layout, future, uid, replace_ai_bridge=replace_ai_bridge,
-                       accept_main_record=accept_main_record)
+        plan_launchers(layout, future, uid)
         _run_version(stage / "bin/python")
         discard = layout.data / f"venv.discard-{secrets.token_hex(8)}"
         had_venv, had_previous = layout.venv.exists(), layout.previous.exists()
@@ -493,8 +425,7 @@ def activate(layout: Layout, stage: Path, uid: int, *, replace_ai_bridge: bool =
         with _venv_transaction(layout, uid, moves):
             _fault("after_venv_swap")
             _run_version(future)
-            report = install(layout, future, uid, replace_ai_bridge=replace_ai_bridge,
-                             accept_main_record=accept_main_record)
+            report = install(layout, future, uid)
         if had_previous:
             shutil.rmtree(discard, ignore_errors=True)
         report["venv"] = str(layout.venv)
@@ -502,78 +433,39 @@ def activate(layout: Layout, stage: Path, uid: int, *, replace_ai_bridge: bool =
         return report
 
 
-def _latest_backup(layout: Layout, name: str) -> Path | None:
-    if not layout.backups.is_dir():
-        return None
-    folders = sorted((p for p in layout.backups.iterdir() if p.name.endswith("-" + name) and p.is_dir()),
-                     reverse=True)
-    return folders[0] if folders else None
-
-
-def rollback(layout: Layout, uid: int, dry_run: bool = False, venv: bool = False) -> dict:
-    """Put the server's original ai-bridge launcher back (and optionally the previous venv)."""
+def rollback(layout: Layout, uid: int, dry_run: bool = False) -> dict:
+    """Swap the previous virtualenv back in."""
     lock = contextlib.nullcontext() if dry_run else install_lock(layout)
     with lock:
-        if venv:
-            for path in (layout.venv, layout.previous):
-                _venv_slot(path, uid)
-            if not dry_run:
-                _recover_venv(layout, uid)
-        result = _rollback_launcher(layout, uid, dry_run)
-        if venv and layout.previous.exists():
-            if dry_run:
-                result["would_restore_venv"] = str(layout.previous)
-            else:
-                # Consume the previous slot. Retain the displaced version separately;
-                # a repeat rollback must never toggle between the two versions.
-                retired = layout.data / f"venv.rolled-back-{secrets.token_hex(8)}"
-                moves = [(layout.venv, retired)] if layout.venv.exists() else []
-                moves.append((layout.previous, layout.venv))
-                with _venv_transaction(layout, uid, moves):
-                    _fault("after_venv_swap")
-                result["restored_venv"] = str(layout.venv)
+        for path in (layout.venv, layout.previous):
+            _venv_slot(path, uid)
+        if not dry_run:
+            _recover_venv(layout, uid)
+        result = {"restored_venv": None}
+        if not layout.previous.exists():
+            result["note"] = "No previous virtualenv; nothing to roll back."
+        elif dry_run:
+            result["would_restore_venv"] = str(layout.previous)
+        else:
+            # Consume the previous slot. Retain the displaced version separately;
+            # a repeat rollback must never toggle between the two versions.
+            retired = layout.data / f"venv.rolled-back-{secrets.token_hex(8)}"
+            moves = [(layout.venv, retired)] if layout.venv.exists() else []
+            moves.append((layout.previous, layout.venv))
+            with _venv_transaction(layout, uid, moves):
+                _fault("after_venv_swap")
+            result["restored_venv"] = str(layout.venv)
         return result
-
-
-def _rollback_launcher(layout: Layout, uid: int, dry_run: bool) -> dict:
-    record = load_record(layout, uid) if dry_run else reconcile(layout, uid)
-    target = layout.bin / "ai-bridge"
-    folder = _latest_backup(layout, "ai-bridge")
-    if not folder:
-        return {"restored": None, "note": "No backed-up server launcher; nothing to roll back."}
-    meta = json.loads(read_regular(folder / "backup.json", uid, 65536)[0])
-    data, _ = read_regular(folder / "ai-bridge", uid)
-    if sha256(data) != meta.get("sha256") or meta.get("original_path") != str(target):
-        raise Refusal(f"Backup {folder} failed verification; restore it manually.")
-    state = classify(layout, target, uid, record, False)
-    if state["state"] == "main" and state["sha256"] == meta["sha256"]:
-        return {"restored": None, "note": "The server's launcher is already in place."}
-    if state["state"] not in ("ours", "absent"):
-        raise Refusal(f"{target} is no longer the ai-bridge-cli launcher ({state.get('reason', state['state'])}); "
-                      "not overwriting it.")
-    if dry_run:
-        return {"would_restore": str(target), "from": str(folder)}
-    record["pending"][str(target)] = {"new": meta["sha256"], "old": state.get("sha256"), "restore": True}
-    save_record(layout, record)
-    _publish(target, data, state.get("identity"))
-    record["launchers"].pop(str(target), None)
-    record["pending"].pop(str(target), None)
-    save_record(layout, record)
-    return {"restored": str(target), "from": str(folder), "sha256": meta["sha256"]}
 
 
 def uninstall(layout: Layout, uid: int, dry_run: bool = False) -> dict:
     lock = contextlib.nullcontext() if dry_run else install_lock(layout)
     with lock:
-        report = {"removed": [], "kept": [], "rollback": None, "removed_venvs": []}
-        try:
-            report["rollback"] = _rollback_launcher(layout, uid, dry_run)
-        except Refusal as error:
-            report["rollback"] = {"error": str(error)}
+        report = {"removed": [], "kept": [], "removed_venvs": []}
         record = load_record(layout, uid) if dry_run else reconcile(layout, uid)
         for name in NAMES:
             target = layout.bin / name
-            state = classify(layout, target, uid, record, False)
+            state = classify(layout, target, uid, record)
             if state["state"] == "ours":
                 if not dry_run:
                     _unpublish(target, state["identity"])
@@ -594,18 +486,16 @@ def uninstall(layout: Layout, uid: int, dry_run: bool = False) -> dict:
 
 def status(layout: Layout, uid: int) -> dict:
     record = load_record(layout, uid)
-    return {name: {k: v for k, v in classify(layout, layout.bin / name, uid, record, False).items()
+    return {name: {k: v for k, v in classify(layout, layout.bin / name, uid, record).items()
                    if k in ("state", "reason", "sha256")} for name in NAMES}
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="ai-bridge-cli installer")
+    parser = argparse.ArgumentParser(prog="agentls installer")
     parser.add_argument("command", choices=("preflight", "install", "activate", "rollback", "uninstall", "status"))
     parser.add_argument("--venv-python", type=Path)
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--data-dir", type=Path)
-    parser.add_argument("--no-replace-ai-bridge", action="store_true")
-    parser.add_argument("--accept-main-record", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     account = pwd.getpwuid(os.geteuid())
@@ -616,22 +506,21 @@ def main(argv=None) -> int:
         print("ERROR: HOME differs from your passwd home directory.", file=sys.stderr)
         return 1
     layout = Layout(Path(account.pw_dir), args.data_dir)
-    options = {"replace_ai_bridge": not args.no_replace_ai_bridge, "accept_main_record": args.accept_main_record}
     try:
         if args.command in ("preflight", "install"):
             python = args.venv_python or layout.venv / "bin/python"
             if args.command == "preflight" or args.dry_run:
-                result, _ = plan_launchers(layout, python, account.pw_uid, **options)
+                result, _ = plan_launchers(layout, python, account.pw_uid)
                 result["dry_run"] = True
             else:
                 with install_lock(layout):
-                    result = install(layout, python, account.pw_uid, **options)
+                    result = install(layout, python, account.pw_uid)
         elif args.command == "activate":
             if not args.stage:
                 raise Refusal("--stage is required.")
-            result = activate(layout, args.stage, account.pw_uid, **options)
+            result = activate(layout, args.stage, account.pw_uid)
         elif args.command == "rollback":
-            result = rollback(layout, account.pw_uid, args.dry_run, venv=True)
+            result = rollback(layout, account.pw_uid, args.dry_run)
         elif args.command == "uninstall":
             result = uninstall(layout, account.pw_uid, args.dry_run)
         else:

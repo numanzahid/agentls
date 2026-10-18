@@ -69,7 +69,7 @@ class NativeReader:
             if (not lines[0].startswith(b'http/1.1 101 ') or
                     b'sec-websocket-accept: ' + expected.lower() not in lines):
                 raise UnsafePath('Unsupported Codex control socket handshake.')
-            self.call('initialize', {'clientInfo': {'name': 'ai_bridge_cli_idle_check', 'version': '1'}})
+            self.call('initialize', {'clientInfo': {'name': 'agentls_idle_check', 'version': '1'}})
             self._send({'method': 'initialized'})
         except BaseException:
             self.sock.close()

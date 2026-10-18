@@ -2,7 +2,6 @@
 
 Field numbers were verified against Cursor CLI 2026.10.14. Unknown or missing
 structures fail explicitly; scanning every blob would include abandoned turns.
-Adapted from the MIT-licensed ai-bridge server (ai_bridge/cursor_store.py).
 """
 from __future__ import annotations
 

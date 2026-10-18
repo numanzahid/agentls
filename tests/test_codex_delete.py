@@ -9,9 +9,9 @@ import fixtures
 import pytest
 from conftest import CODEX_CHILD, CODEX_ID
 
-from ai_bridge_cli import activity, codex_delete, trash
-from ai_bridge_cli.catalog import Catalog
-from ai_bridge_cli.fsutil import UnsafePath
+from agentls import activity, codex_delete, trash
+from agentls.catalog import Catalog
+from agentls.fsutil import UnsafePath
 
 
 def archived(env, *, indexed=False):
@@ -92,7 +92,7 @@ def test_fresh_active_checks(env, monkeypatch, mode):
     elif mode == 'recent':
         os.utime(session.storage_path, None)
     elif mode == 'job':
-        monkeypatch.setattr(codex_delete.BridgeState, 'session_jobs', lambda self: {
+        monkeypatch.setattr(codex_delete.McpState, 'session_jobs', lambda self: {
             ('codex', CODEX_ID): [{'id': 'busy', 'status': 'running'}]})
     monkeypatch.setattr(activity, 'snapshot', lambda: act)
     with pytest.raises(UnsafePath):
@@ -264,7 +264,7 @@ def test_identified_process_is_checked_by_session_evidence(env, monkeypatch):
 
 
 def test_managed_idle_archive_exemption_is_not_extended(env, monkeypatch):
-    from ai_bridge_cli import codex_idle
+    from agentls import codex_idle
     session = archived(env)
     info = os.stat(session.storage_path)
     key = info.st_dev, info.st_ino
@@ -306,8 +306,8 @@ def test_shared_writable_archive_directory_is_refused(env):
 
 @pytest.mark.parametrize('verified_parent', [True, False])
 def test_managed_supervisor_requires_verified_child(env, monkeypatch, verified_parent):
-    from ai_bridge_cli import codex_idle
-    from ai_bridge_cli.fsutil import identity
+    from agentls import codex_idle
+    from agentls.fsutil import identity
     proc = env.root / 'proc'
     supervisor = proc / '4321'
     supervisor.mkdir(parents=True)
@@ -342,7 +342,7 @@ def test_managed_supervisor_requires_verified_child(env, monkeypatch, verified_p
 
 @pytest.mark.parametrize('failure', [FileNotFoundError, PermissionError])
 def test_managed_daemon_startup_with_unavailable_identity_is_refused(env, monkeypatch, failure):
-    from ai_bridge_cli import codex_idle
+    from agentls import codex_idle
     proc = env.root / 'proc'
     base = proc / '4321'
     base.mkdir(parents=True)
@@ -366,7 +366,7 @@ def test_managed_daemon_startup_with_unavailable_identity_is_refused(env, monkey
 def test_relative_binary_override_is_pinned_before_changing_subprocess_cwd(env, monkeypatch):
     session = archived(env)
     monkeypatch.chdir(env.root)
-    monkeypatch.setenv('AI_BRIDGE_CODEX_BIN', 'bin/codex')
+    monkeypatch.setenv('AGENTLS_CODEX_BIN', 'bin/codex')
     plan = codex_delete.prepare(session)
     assert Path(plan.binary).is_absolute() and plan.binary == str(env.root / 'bin/codex')
     codex_delete.execute(plan)

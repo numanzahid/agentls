@@ -1,7 +1,6 @@
-"""Cursor CLI chats: $AI_BRIDGE_CURSOR_HOME/chats/<md5(workspace)>/<chat-uuid>/store.db.
+"""Cursor CLI chats: $AGENTLS_CURSOR_HOME/chats/<md5(workspace)>/<chat-uuid>/store.db.
 
 SQLite stores are opened read-only (immutable when the WAL is empty).
-Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
 """
 from __future__ import annotations
 

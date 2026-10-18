@@ -1,8 +1,6 @@
 """Independent stop and recoverable force removal. No arbitrary PID inputs."""
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import select
 import signal
@@ -11,8 +9,8 @@ from pathlib import Path
 from dataclasses import dataclass, replace
 
 from . import activity, trash
-from .bridge import BOOT_ID, BridgeRuntime, BridgeState, identity_matches, uncertain
-from .fsutil import UnsafePath, lstat_at, pinned_parent, read_bytes_nofollow
+from .mcp import McpState, uncertain
+from .fsutil import UnsafePath, lstat_at, pinned_parent
 from .model import Session
 from .native import storage_safe
 from .scanners import Scanner
@@ -23,10 +21,7 @@ from .tui.process_delete import ProcessIdentity, inspect
 class StopTarget:
     session: Session
     process: ProcessIdentity | None = None
-    job_id: str | None = None
-    record: str | None = None
     details: tuple[str, ...] = ()
-    lineage: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -34,10 +29,6 @@ class SessionStopPlan:
     selected: tuple[Session, ...]
     affected: tuple[Session, ...]
     targets: tuple[StopTarget, ...]
-
-    @property
-    def bridge_cleanup(self):
-        return any(t.job_id for t in self.targets)
 
 
 def _scope(sessions: list[Session]) -> list[Session]:
@@ -65,62 +56,6 @@ def _scope(sessions: list[Session]) -> list[Session]:
     return related
 
 
-def _saved_present(pid: int, ident: dict) -> bool:
-    if ident.get('boot_id') != BOOT_ID:
-        return False
-    start = activity.proc_start_ticks(pid)
-    if start is None:
-        base = activity.PROC / str(pid)
-        if base.exists() and not activity._exited(base):
-            raise UnsafePath(f'PID {pid} identity unreadable; inspect locally.')
-        return False
-    return start == str(ident['start_ticks'])
-
-
-def _bridge_target(state, session, job):
-    """Pin the server's private job and lineage, leaving signalling to its adapter."""
-    BridgeRuntime().locate()
-    if not job.get('runner') or not job.get('identity') or job['identity'].get('boot_id') != BOOT_ID:
-        raise UnsafePath(f"Job {job['id']} has no verified current-boot managed runner. Inspect it locally.")
-    raw = read_bytes_nofollow(state.jobs_dir / f"{job['id']}.json", 1 << 20, private=True)
-    raw_job = json.loads(raw)
-    if (raw_job.get('id') != job['id'] or raw_job.get('kind') != 'agent'
-            or raw_job.get('agent') != session.agent
-            or raw_job.get('identity') != job.get('identity')
-            or raw_job.get('pid') != job.get('pid')
-            or raw_job.get('runner') != job.get('runner')
-            or (state._observed_session(raw_job) or '').lower() != session.session_id.lower()):
-        raise UnsafePath('Bridge job identity changed during preview; refresh.')
-    path = state._sidecar(job['id'], 'process')
-    if not path:
-        raise UnsafePath(f"Job {job['id']} has no saved process lineage; cannot preview background impact.")
-    saved = read_bytes_nofollow(path, 1 << 20, private=True)
-    process = json.loads(saved)
-    identities = [(job.get('pid'), job.get('identity')),
-                  (process.get('pid'), process.get('identity'))]
-    identities.extend((process.get('descendants') or {}).items())
-    details, lineage = [], []
-    for pid, ident in identities:
-        if not isinstance(ident, dict) or ident.get('boot_id') != BOOT_ID or not ident.get('start_ticks'):
-            raise UnsafePath(f"Job {job['id']}: incomplete lineage identities; inspect locally.")
-        pid = int(pid)
-        lineage.append((pid, json.dumps(ident, sort_keys=True)))
-        if not _saved_present(pid, ident):
-            continue
-        if not identity_matches(pid, ident):
-            raise UnsafePath(f'PID {pid} saved process group changed; inspect locally.')
-        if pid <= 1 or pid in activity._ancestors():
-            raise UnsafePath('Refusing the browser, an ancestor or PID 1.')
-        cmd = (activity.PROC / str(pid) / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
-        if 'app-server' in cmd or 'mcp-server' in cmd:
-            raise UnsafePath('Shared daemon found in lineage; stopping it is refused.')
-        details.append(f'PID {pid} · {cmd}')
-    if not details:
-        raise UnsafePath(f"Job {job['id']}: no verified live lineage. Refresh; stale or ambiguous records need inspection.")
-    return StopTarget(session, job_id=job['id'], record=hashlib.sha256(raw + saved).hexdigest(),
-                      details=tuple(sorted(set(details))), lineage=tuple(sorted(set(lineage))))
-
-
 def _related_keys(row: Session) -> set[tuple[int, int]]:
     keys = set()
     for path, required in trash._related(row):
@@ -140,24 +75,21 @@ def prepare_stop(sessions: list[Session]) -> SessionStopPlan:
     if not sessions:
         raise UnsafePath('Select at least one session.')
     related = _scope(sessions)
-    state = BridgeState()
+    state = McpState()
     jobs = state.session_jobs()
     if state.problems or state.unattributed():
-        raise UnsafePath('Bridge jobs are unreadable or unattributed; inspect jobs before stopping sessions.')
+        raise UnsafePath('MCP jobs are unreadable or unattributed; inspect them in the MCP server before stopping sessions.')
     act = activity.snapshot()
     if not act.complete:
         raise UnsafePath('Process inspection incomplete: ' + (act.incompleteness() or '') + '. Close the listed processes and refresh.')
     targets = []
-    seen_jobs, seen_pids = set(), set()
+    seen_pids = set()
     for row in related:
         info = storage_safe(row)
-        busy = [j for j in jobs.get((row.agent, row.session_id.lower()), []) if uncertain(j)]
+        busy = [j['id'] for j in jobs.get((row.agent, row.session_id.lower()), []) if uncertain(j)]
         if busy:
-            for job in busy:
-                if job['id'] not in seen_jobs:
-                    targets.append(_bridge_target(state, row, job))
-                    seen_jobs.add(job['id'])
-            continue
+            raise UnsafePath(f'{row.selector}: MCP job {", ".join(busy)} may still be running; '
+                             'stop it through the MCP server, then refresh.')
         keys = _related_keys(row) | {(info.st_dev, info.st_ino)}
         pids = set()
         for key in keys:
@@ -185,7 +117,7 @@ def prepare_stop(sessions: list[Session]) -> SessionStopPlan:
 
 def _signature(plan):
     return (tuple((s.key, s.storage_path, s.parent_session_id) for s in plan.affected),
-            tuple((t.session.key, t.process, t.job_id, t.record, t.details, t.lineage) for t in plan.targets))
+            tuple((t.session.key, t.process, t.details) for t in plan.targets))
 
 
 def execute_stop(plan: SessionStopPlan, timeout: float = 3.0) -> list[str]:
@@ -201,17 +133,6 @@ def execute_stop(plan: SessionStopPlan, timeout: float = 3.0) -> list[str]:
                 handles.append((target, os.pidfd_open(target.process.pid)))
         if _signature(prepare_stop(list(plan.selected))) != _signature(plan):
             raise UnsafePath('Process identity changed after pidfd pinning; nothing stopped.')
-        for target in fresh.targets:
-            if target.job_id:
-                state = BridgeState()
-                if _bridge_target(state, target.session, state.job(target.job_id)) != target:
-                    raise UnsafePath('Bridge lineage changed before cancellation; confirm a fresh preview.')
-                BridgeRuntime().call('agents.stop', {'job_id': target.job_id})
-                # Cancellation requests do not establish that background work ended.
-                if (uncertain(BridgeState().job(target.job_id))
-                        or any(_saved_present(pid, json.loads(ident)) for pid, ident in target.lineage)):
-                    raise UnsafePath(f'Job {target.job_id}: cancellation requested; cleanup is still unconfirmed. Refresh before deleting.')
-                completed.append(target.session.selector)
         for target, fd in handles:
             if inspect(target.process.pid, target.session) != target.process:
                 raise UnsafePath('Process identity changed before signal; retry.')

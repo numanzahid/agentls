@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from . import activity as activity_mod
 from . import paths
-from .bridge import BridgeState, identity_matches, uncertain
+from .mcp import McpState, identity_matches, uncertain
 from .model import ORIGINS, SORT_KEYS, STATUSES, Session
 from .overlay import Overlays
 from .provenance import ProvenanceReader
@@ -75,7 +75,7 @@ def _inherit_modes(sessions: list[Session]) -> None:
 class Catalog:
     scanner: Scanner = field(default_factory=Scanner)
     overlays: Overlays = field(default_factory=Overlays)
-    bridge: BridgeState = field(default_factory=BridgeState)
+    mcp: McpState = field(default_factory=McpState)
     sessions: list[Session] = field(default_factory=list)
     errors: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -101,14 +101,14 @@ class Catalog:
             self.warnings.append(self.overlays.error)
         jobs_complete = True
         try:
-            jobs = self.bridge.session_jobs()
-            if self.bridge.problems:
+            jobs = self.mcp.session_jobs()
+            if self.mcp.problems:
                 jobs_complete = False
-                self.warnings.append(f"{len(self.bridge.problems)} bridge job record(s) unreadable; "
+                self.warnings.append(f"{len(self.mcp.problems)} MCP job record(s) unreadable; "
                                      "status and origin are shown as uncertain where it matters.")
         except Exception as error:
             jobs, jobs_complete = {}, False
-            self.warnings.append(f"Bridge job records unreadable: {error}")
+            self.warnings.append(f"MCP job records unreadable: {error}")
         self.activity = activity_mod.snapshot() if probe_activity else activity_mod.Activity()
         now = time.time()
         with ProvenanceReader() as reader:
@@ -116,7 +116,7 @@ class Catalog:
             for s in sessions:
                 s.origin, s.provenance, s.origin_note = reader.lookup(
                     s.agent, s.session_id, created=s.created,
-                    bridge_referenced=(s.agent, s.session_id.lower()) in jobs, jobs_complete=jobs_complete)
+                    mcp_referenced=(s.agent, s.session_id.lower()) in jobs, jobs_complete=jobs_complete)
                 if is_uuid(s.session_id):
                     state = self.overlays.resolve(s.agent, s.session_id, own)
                     s.alias = state.get("alias") or None
@@ -135,17 +135,15 @@ class Catalog:
         s.job_ids = [j["id"] for j in jobs]
         busy = [j for j in jobs if uncertain(j)]
         s.active_job_ids = [j["id"] for j in busy]
-        s.task_id = next((j.get("task_id") for j in jobs if j.get("task_id")), None) or \
-            self.bridge.task_for_cwd(s.cwd)
         running = [j for j in busy if j.get("status") == "running" and
                    identity_matches(j.get("pid"), j.get("identity"))]
         evidence = self.activity.evidence(s.agent, s.session_id, s.storage_path) if self.activity else None
         if running:
-            s.status, s.status_note = "active", f"Bridge job {running[0]['id']} is running this session."
+            s.status, s.status_note = "active", f"MCP job {running[0]['id']} is running this session."
         elif evidence:
             s.status, s.status_note = "active", evidence
         elif busy:
-            s.status, s.status_note = "uncertain", (f"Bridge job {busy[0]['id']} is {busy[0].get('status')} "
+            s.status, s.status_note = "uncertain", (f"MCP job {busy[0]['id']} is {busy[0].get('status')} "
                                                     "and its process cannot be verified.")
         elif now - s.updated < activity_mod.RECENT_SECONDS:
             s.status, s.status_note = "recent", "Modified moments ago; it may still be in use."

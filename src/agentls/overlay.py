@@ -1,15 +1,10 @@
 """Display aliases and archive flags. Native transcripts are never modified.
 
-Writes go to this tool's own state file ($AI_BRIDGE_CLI_STATE_DIR/overlays.json).
-Overlays written by older ai-bridge CLIs inside the server's state directory
-(management/sessions/<sha256(agent:id)>.json) are honoured READ-ONLY as a
-fallback; any value set here takes precedence.
+Stored in this tool's own state file ($AGENTLS_STATE_DIR/overlays.json).
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
@@ -29,13 +24,11 @@ def validate_alias(alias: str) -> str:
 
 
 class Overlays:
-    def __init__(self, state_dir: Path | None = None, bridge_state_dir: Path | None = None):
+    def __init__(self, state_dir: Path | None = None):
         self.dir = Path(state_dir or paths.cli_state_dir())
         self.path = self.dir / "overlays.json"
-        self.legacy_dir = Path(bridge_state_dir or paths.bridge_state_dir()) / "management" / "sessions"
         self._data: dict | None = None
         self._key: tuple | None = None
-        self._legacy_index: set[str] = set()
         self.error: str | None = None
 
     @staticmethod
@@ -59,42 +52,18 @@ class Overlays:
         return self._data
 
     def load(self) -> dict[str, dict]:
-        """Own records {"agent:id": {...}}; also indexes legacy server-side files."""
+        """Records {"agent:id": {...}}."""
         self.error = None
-        self._legacy_index = self._legacy_names()
         try:
             return dict(self._load_own())
         except (OSError, ValueError, UnsafePath) as error:
             self.error = f"Overlay file unreadable ({error}); aliases/archive flags hidden."
             return {}
 
-    def _legacy_names(self) -> set[str]:
-        try:
-            if self.legacy_dir.is_symlink() or not self.legacy_dir.is_dir():
-                return set()
-            return {n for n in os.listdir(self.legacy_dir) if n.endswith(".json") and len(n) == 69}
-        except OSError:
-            return set()
-
-    def _legacy(self, agent: str, sid: str) -> dict:
-        name = hashlib.sha256(f"{agent}:{sid}".encode()).hexdigest() + ".json"
-        if name not in self._legacy_index:
-            return {}
-        try:
-            value = json.loads(read_bytes_nofollow(self.legacy_dir / name, 65536, private=True))
-        except (OSError, ValueError, UnsafePath):
-            return {}
-        if not isinstance(value, dict):
-            return {}
-        return {k: value[k] for k, kind in (("alias", str), ("archived", bool))
-                if isinstance(value.get(k), kind)}
-
     def resolve(self, agent: str, sid: str, own: dict) -> dict:
-        """Effective {"alias", "archived"}: own values (even None/False) beat legacy ones."""
+        """Effective {"alias", "archived"} for one session."""
         record = own.get(f"{agent}:{sid}") or {}
-        merged = self._legacy(agent, sid)
-        merged.update({k: v for k, v in record.items() if k in ("alias", "archived")})
-        return merged
+        return {k: v for k, v in record.items() if k in ("alias", "archived")}
 
     def update(self, items: list[tuple[str, str]], **changes) -> int:
         """Apply alias/archived changes to many sessions in one locked write."""
@@ -108,7 +77,7 @@ class Overlays:
             for key in keys:
                 record = dict(current.get(key) or {})
                 for field, value in changes.items():
-                    record[field] = value  # None/False are explicit: they override legacy values
+                    record[field] = value
                 record["updated"] = time.time()
                 current[key] = record
             atomic_write_json(self.path, {"schema": 1, "sessions": current})

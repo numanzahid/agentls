@@ -1,7 +1,4 @@
-"""Claude Code transcripts: $CLAUDE_CONFIG_DIR/projects/<slug>/<uuid>.jsonl.
-
-Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
-"""
+"""Claude Code transcripts: $CLAUDE_CONFIG_DIR/projects/<slug>/<uuid>.jsonl."""
 from __future__ import annotations
 
 import os

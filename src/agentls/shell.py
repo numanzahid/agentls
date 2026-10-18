@@ -8,34 +8,33 @@ from pathlib import Path
 
 
 def bash_init() -> str:
-    return r'''# Opt in with: eval "$(command ai-bridge shell-init bash)"
-_ai_bridge_shell_run() {
-    local _ab_command=$1 _ab_dir _ab_cwd _ab_status
+    return r'''# Opt in with: eval "$(command agentls shell-init bash)"
+_agentls_shell_run() {
+    local _al_command=$1 _al_dir _al_cwd _al_status
     shift
-    _ab_dir=$(command mktemp -d /tmp/ai-bridge-shell.XXXXXXXXXX) || return
-    if AI_BRIDGE_CLI_CWD_FILE="$_ab_dir/cwd" command "$_ab_command" "$@"; then
-        _ab_status=0
+    _al_dir=$(command mktemp -d /tmp/agentls-shell.XXXXXXXXXX) || return
+    if AGENTLS_CWD_FILE="$_al_dir/cwd" command "$_al_command" "$@"; then
+        _al_status=0
     else
-        _ab_status=$?
+        _al_status=$?
     fi
-    if IFS= read -r -d '' _ab_cwd 2>/dev/null < "$_ab_dir/cwd"; then
-        if ! builtin cd -- "$_ab_cwd"; then
-            printf '%s\n' 'ai-bridge: could not change shell to the saved project directory' >&2
+    if IFS= read -r -d '' _al_cwd 2>/dev/null < "$_al_dir/cwd"; then
+        if ! builtin cd -- "$_al_cwd"; then
+            printf '%s\n' 'agentls: could not change shell to the saved project directory' >&2
         fi
     fi
-    command rm -f -- "$_ab_dir/cwd"
-    command rmdir -- "$_ab_dir"
-    return "$_ab_status"
+    command rm -f -- "$_al_dir/cwd"
+    command rmdir -- "$_al_dir"
+    return "$_al_status"
 }
-ai-bridge() { _ai_bridge_shell_run ai-bridge "$@"; }
-ai-bridge-cli() { _ai_bridge_shell_run ai-bridge-cli "$@"; }
+agentls() { _agentls_shell_run agentls "$@"; }
 '''
 
 
 @contextmanager
 def cwd_handoff(cwd: str):
     """Publish NUL-terminated data in a private wrapper directory; undo failed exec."""
-    target = os.environ.get("AI_BRIDGE_CLI_CWD_FILE")
+    target = os.environ.get("AGENTLS_CWD_FILE")
     if not target:
         yield
         return

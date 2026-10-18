@@ -2,7 +2,6 @@
 
 Rollout files are indexed by Codex's own SQLite state, so this module only
 ever reads them. Archive/delete go through the codex CLI itself (see trash.py).
-Adapted from the MIT-licensed ai-bridge server (ai_bridge/agents.py).
 """
 from __future__ import annotations
 

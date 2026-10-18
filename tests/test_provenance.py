@@ -3,7 +3,7 @@ import os
 import fixtures
 from conftest import CLAUDE_ID, CODEX_ID
 
-from ai_bridge_cli.provenance import ProvenanceReader, filename, lookup
+from agentls.provenance import ProvenanceReader, filename, lookup
 
 
 def tree(path):
@@ -21,7 +21,7 @@ def test_verified_record_is_mcp(env):
     assert origin == "mcp" and row["job_ids"] == ["1018-000000-abcdef"]
 
 
-def test_no_bridge_at_all_is_direct(env):
+def test_no_mcp_server_at_all_is_direct(env):
     assert lookup("claude", CLAUDE_ID)[0] == "direct"  # no state dir, no install root
 
 
@@ -31,12 +31,12 @@ def test_no_record_needs_proof_to_be_direct(env):
     origin, _, note = lookup("claude", CLAUDE_ID, created=500.0)
     assert origin == "unknown" and "predates" in note  # may have been MCP before recording began
     assert lookup("claude", CLAUDE_ID, created=None)[0] == "unknown"
-    assert lookup("claude", CLAUDE_ID, created=2000.0, bridge_referenced=True)[0] == "unknown"
+    assert lookup("claude", CLAUDE_ID, created=2000.0, mcp_referenced=True)[0] == "unknown"
     assert lookup("claude", CLAUDE_ID, created=2000.0, jobs_complete=False)[0] == "unknown"
 
 
-def test_installed_bridge_without_state_is_unknown(env):
-    env.bridge_root.mkdir()
+def test_installed_mcp_server_without_state_is_unknown(env):
+    env.mcp_root.mkdir()
     assert lookup("claude", CLAUDE_ID)[0] == "unknown"
 
 
@@ -45,14 +45,14 @@ def test_dangling_symlinks_are_not_missing(env):
     assert lookup("claude", CLAUDE_ID, created=2000.0)[0] == "unknown"
     os.unlink(env.state)
     fixtures.provenance(env.state, "codex", CODEX_ID)
-    record = env.state / "management" / "provenance" / __import__("ai_bridge_cli.provenance", fromlist=["x"]).filename(
+    record = env.state / "management" / "provenance" / __import__("agentls.provenance", fromlist=["x"]).filename(
         "claude", CLAUDE_ID)
     os.symlink(env.root / "nowhere.json", record)  # dangling record
     origin, _, note = lookup("claude", CLAUDE_ID, created=2000.0)
     assert origin == "unknown" and "rejected" in note
 
 
-def test_missing_directory_with_bridge_state_is_unknown(env):
+def test_missing_directory_with_mcp_state_is_unknown(env):
     (env.state / "jobs").mkdir(parents=True)
     assert lookup("claude", CLAUDE_ID)[0] == "unknown"
 
@@ -115,8 +115,8 @@ def test_reader_never_writes(env):
 def test_headless_session_without_record_is_never_mcp(env):
     fixtures.claude_session(env.claude, CLAUDE_ID, env.project, sdk=True)
     fixtures.provenance(env.state, "codex", CODEX_ID)  # provenance dir exists and is valid
-    from ai_bridge_cli.catalog import Catalog
+    from agentls.catalog import Catalog
     session = Catalog().refresh(probe_activity=False).get("claude", CLAUDE_ID)
-    # created 2026 > provenance epoch (first_seen=1.0) and no bridge job references it
+    # created 2026 > provenance epoch (first_seen=1.0) and no MCP job references it
     assert session.mode == "noninteractive" and session.origin == "direct"
-    assert session.to_json()["bridge_origin"] is None
+    assert session.to_json()["origin"] != "mcp"

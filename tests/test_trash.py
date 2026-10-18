@@ -7,9 +7,9 @@ import fixtures
 import pytest
 from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID
 
-from ai_bridge_cli import trash
-from ai_bridge_cli.activity import Activity
-from ai_bridge_cli.catalog import Catalog
+from agentls import trash
+from agentls.activity import Activity
+from agentls.catalog import Catalog
 
 
 def catalog():
@@ -92,7 +92,7 @@ def test_active_sessions_are_blocked(populated):
     session = catalog().get("claude", CLAUDE_ID)
     live = Activity(claude_live={CLAUDE_ID: 4242})
     assert not trash.build_plan([session], live).items[0].allowed
-    busy = replace(session, status="uncertain", status_note="bridge job", active_job_ids=["1018-1-a"])
+    busy = replace(session, status="uncertain", status_note="MCP job", active_job_ids=["1018-1-a"])
     assert not trash.build_plan([busy], Activity()).items[0].allowed
 
 

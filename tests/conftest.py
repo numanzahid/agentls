@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 import fixtures  # noqa: E402
-from ai_bridge_cli import activity as _activity  # noqa: E402
+from agentls import activity as _activity  # noqa: E402
 
 REAL_SNAPSHOT = _activity.snapshot  # for tests that probe the real (or a fake) /proc
 
@@ -30,10 +30,9 @@ class Env:
     codex: Path
     cursor: Path
     state: Path
-    tasks: Path
     cli_state: Path
     cli_data: Path
-    bridge_root: Path
+    mcp_root: Path
     project: Path
     log: Path
 
@@ -52,32 +51,32 @@ def quiet_processes(request, monkeypatch):
     test_activity.py exercises the real /proc probe with its own child processes.
     """
     if request.module.__name__ != "test_activity":
-        from ai_bridge_cli import activity
+        from agentls import activity
         monkeypatch.setattr(activity, "snapshot", lambda: activity.Activity())
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     for key in list(os.environ):
-        if key.startswith(("AI_BRIDGE_", "CLAUDE_CONFIG_DIR", "CODEX_HOME")):
+        if key.startswith(("AGENTLS_", "AI_BRIDGE_", "CLAUDE_CONFIG_DIR", "CODEX_HOME")):
             monkeypatch.delenv(key, raising=False)
     e = Env(root=tmp_path, claude=tmp_path / "claude", codex=tmp_path / "codex", cursor=tmp_path / "cursor",
-            state=tmp_path / "bridge-state", tasks=tmp_path / "bridge-tasks", cli_state=tmp_path / "cli-state",
-            cli_data=tmp_path / "cli-data", bridge_root=tmp_path / "bridge-install",
+            state=tmp_path / "mcp-state", cli_state=tmp_path / "cli-state",
+            cli_data=tmp_path / "cli-data", mcp_root=tmp_path / "mcp-install",
             project=tmp_path / "project", log=tmp_path / "calls.log")
     e.project.mkdir()
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     for path in (e.claude, e.codex, e.cursor):
         path.mkdir()
     for var, value in (("CLAUDE_CONFIG_DIR", e.claude), ("CODEX_HOME", e.codex),
-                       ("AI_BRIDGE_CURSOR_HOME", e.cursor), ("AI_BRIDGE_STATE_DIR", e.state),
-                       ("AI_BRIDGE_TASKS_DIR", e.tasks), ("AI_BRIDGE_CLI_STATE_DIR", e.cli_state),
-                       ("AI_BRIDGE_CLI_DATA_DIR", e.cli_data), ("AI_BRIDGE_CLI_BRIDGE_ROOT", e.bridge_root),
+                       ("AGENTLS_CURSOR_HOME", e.cursor), ("AI_BRIDGE_STATE_DIR", e.state),
+                       ("AGENTLS_STATE_DIR", e.cli_state),
+                       ("AGENTLS_DATA_DIR", e.cli_data), ("AGENTLS_MCP_ROOT", e.mcp_root),
                        ("FAKE_LOG", e.log)):
         monkeypatch.setenv(var, str(value))
     bins = fixtures.fake_bins(tmp_path / "bin", e.log)
     monkeypatch.setenv("PATH", f"{bins['codex'].parent}{os.pathsep}{os.environ.get('PATH', '')}")
-    from ai_bridge_cli import native
+    from agentls import native
     native._HELP_CACHE.clear()
     return e
 
