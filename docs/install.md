@@ -16,11 +16,14 @@ never touches the ai-bridge MCP service, its releases or its state.
    launcher path holds a file this tool does not own.
 2. **Build.** Creates `~/.local/share/ai-bridge-cli/venv.staging-*` from a clean copy of the
    source, with the pins in `constraints.txt`, then smoke-tests it (version, TUI import, a
-   headless listing). A failure here changes nothing.
+   headless listing). A failure here changes nothing. pip, setuptools and wheel live in a reusable
+   `~/.cache/ai-bridge-cli/build-venv` (rebuilt when Python changes; safe to delete), so the app's
+   venv has no pip and updates take a few seconds.
 3. **Activate, all or nothing.** Under `.install.lock` (a concurrent install or rollback is
    refused) it repeats the preflight, moves the old venv to `venv.previous`, swaps the new one in,
    verifies it, and writes two launchers, `~/.local/bin/ai-bridge-cli` and `~/.local/bin/ai-bridge`,
-   that run `venv/bin/python -I -m ai_bridge_cli`.
+   that run `-I -m ai_bridge_cli` through `venv/libexec/<name>`, a link to the venv's Python, so
+   tmux and `ps` show the process as `ai-bridge`.
 
 Every change is journaled first (`launchers.json`, `venv-transaction.json`). Any failure restores
 the previous venv and launchers. If the installer is killed, the next install or rollback

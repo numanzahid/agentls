@@ -94,16 +94,42 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Reusable build tools (pip, setuptools, wheel), kept in the cache so updates skip
+# creating a pip and an isolated build environment each time. Safe to delete.
+TOOLS="$CANONICAL_HOME/.cache/ai-bridge-cli/build-venv"
+PIP=("$TOOLS/bin/python" -I -m pip --disable-pip-version-check --no-input -q)
+tools_ok() {
+  [ -x "$TOOLS/bin/python" ] &&
+    [ "$("$TOOLS/bin/python" -I -c 'import sys; print(sys.version)')" = "$("$PY" -I -c 'import sys; print(sys.version)')" ] &&
+    "$TOOLS/bin/python" -I -c 'import pip, wheel, setuptools; raise SystemExit(int(setuptools.__version__.split(".")[0]) < 77)' 2>/dev/null
+}
+if ! tools_ok; then
+  say "Creating the reusable build environment (first install or new Python only)"
+  rm -rf "$TOOLS"
+  mkdir -p "$(dirname "$TOOLS")"
+  chmod 700 "$(dirname "$TOOLS")"
+  "$PY" -m venv "$TOOLS"
+  "${PIP[@]}" install "setuptools>=77" wheel
+fi
+
 say "Creating virtualenv with $("$PY" -V 2>&1)"
-"$PY" -m venv "$STAGE"
+"$PY" -m venv --without-pip "$STAGE"
 # Build from a clean copy so the source tree gets no build artifacts.
+mkdir "$BUILD/src" "$BUILD/dist"
 tar -C "$SRC_DIR" --exclude=.git --exclude=.venv --exclude='*.egg-info' --exclude=__pycache__ \
-    --exclude=build --exclude=dist -cf - . | tar -C "$BUILD" -xf -
+    --exclude=build --exclude=dist -cf - . | tar -C "$BUILD/src" -xf -
 say "Installing ai-bridge-cli and pinned dependencies into the staging virtualenv"
-"$STAGE/bin/python" -m pip --disable-pip-version-check --no-input -q install -c "$CONSTRAINTS" "$BUILD"
+"${PIP[@]}" wheel --no-deps --no-build-isolation -w "$BUILD/dist" "$BUILD/src"
+"${PIP[@]}" --python "$STAGE/bin/python" install --no-compile -c "$CONSTRAINTS" "$BUILD"/dist/*.whl
+
+# Named interpreter links, so the running process shows as ai-bridge (tmux, ps).
+mkdir "$STAGE/libexec"
+ln -s ../bin/python "$STAGE/libexec/ai-bridge"
+ln -s ../bin/python "$STAGE/libexec/ai-bridge-cli"
 
 say "Smoke test (staging)"
 "$STAGE/bin/python" -I -m ai_bridge_cli --version
+"$STAGE/libexec/ai-bridge" -I -m ai_bridge_cli --version >/dev/null || die "Named interpreter link failed; nothing was changed."
 "$STAGE/bin/python" -I -c 'import ai_bridge_cli.tui.app' || die "TUI import failed; nothing was changed."
 "$STAGE/bin/python" -I -m ai_bridge_cli sessions list --limit 1 --json >/dev/null \
   || die "Headless listing failed; nothing was changed."

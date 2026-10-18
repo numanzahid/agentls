@@ -109,9 +109,13 @@ class Layout:
 
 
 def launcher_bytes(python: Path, prog: str) -> bytes:
+    # venv/libexec/<prog> is a symlink to the venv python, so the process is named
+    # after the command (tmux window names, ps); older venvs without it use python.
+    named = python.parent.parent / "libexec" / prog
     return (f"#!/bin/sh\n{MARKER} ({prog}); managed by ai-bridge-cli install.sh - do not edit.\n"
             f"AI_BRIDGE_CLI_PROG={prog}\nexport AI_BRIDGE_CLI_PROG\n"
-            f"exec {shlex.quote(str(python))} -I -m ai_bridge_cli \"$@\"\n").encode()
+            f"PY={shlex.quote(str(named))}\n[ -x \"$PY\" ] || PY={shlex.quote(str(python))}\n"
+            f"exec \"$PY\" -I -m ai_bridge_cli \"$@\"\n").encode()
 
 
 def _fault(point: str) -> None:

@@ -73,6 +73,19 @@ def test_launcher_runs_the_package(home, tmp_path):
     assert proc.returncode == 0 and proc.stdout.startswith("ai-bridge-cli ")
 
 
+def test_launcher_prefers_named_interpreter_link(home, tmp_path):
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin/python").symlink_to(sys.executable)
+    named = venv / "libexec/ai-bridge"
+    named.parent.mkdir()
+    named.write_text('#!/bin/sh\necho "named $*"\n')
+    named.chmod(0o755)
+    installer.install(layout(home), venv / "bin/python", os.geteuid())
+    proc = subprocess.run([str(home / ".local/bin/ai-bridge"), "--version"], capture_output=True, text=True)
+    assert proc.stdout == "named -I -m ai_bridge_cli --version\n"
+
+
 def test_verified_main_launcher_is_backed_up_replaced_and_rolled_back(home, python, monkeypatch):
     target = main_launcher(home, monkeypatch=monkeypatch)
     report = installer.install(layout(home), python, os.geteuid())
