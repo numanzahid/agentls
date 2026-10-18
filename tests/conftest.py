@@ -13,6 +13,10 @@ from ai_bridge_cli import activity as _activity  # noqa: E402
 
 REAL_SNAPSHOT = _activity.snapshot  # for tests that probe the real (or a fake) /proc
 
+# Fixtures create binaries and directories that the code refuses when group-writable;
+# don't let a permissive login umask (e.g. 002) turn safety refusals into test failures.
+os.umask(0o022)
+
 CLAUDE_ID = "5c1f0e2a-7b3d-4c9e-8a61-2f4d9b0c7e13"
 CODEX_ID = "01a00000-0000-7000-8000-000000000001"
 CODEX_CHILD = "01a00000-0000-7000-8000-000000000002"

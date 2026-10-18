@@ -392,7 +392,7 @@ def test_tui_managed_idle_uses_ordinary_archive_confirmation(managed, populated)
         assert isinstance(app.screen, screens.RemoveScreen)
         console = Console(width=100, record=True)
         console.print(app.screen.note)
-        content = console.export_text()
+        content = ' '.join(console.export_text().split())
         assert 'daemon will stay running' in content and 'SIGTERM' not in content
         await pilot.press('d')
         await settle(pilot, app)
