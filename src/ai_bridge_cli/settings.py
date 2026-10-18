@@ -11,15 +11,19 @@ from . import paths
 from .fsutil import UnsafePath, check_private, read_json_nofollow
 
 MODES = ("exec", "suspend")
+REFRESH_CHOICES = (0, 20, 60, 120, 300)  # seconds between automatic browser refreshes; 0 is off
 
 
 @dataclass(frozen=True)
 class Settings:
     launch_mode: str = "exec"
+    refresh_seconds: int = 60
 
     def __post_init__(self):
         if self.launch_mode not in MODES:
             raise ValueError("Unknown native launch mode; expected exec or suspend.")
+        if type(self.refresh_seconds) is not int or self.refresh_seconds not in REFRESH_CHOICES:
+            raise ValueError(f"Unknown refresh interval; expected one of {REFRESH_CHOICES} seconds.")
 
 
 @contextmanager
@@ -55,7 +59,7 @@ def _read(fd: int) -> Settings:
     row = read_json_nofollow("settings.json", private=True, dir_fd=fd)
     if not isinstance(row, dict) or row.get("schema") != 1:
         raise ValueError("Unrecognized CLI settings schema.")
-    return Settings(launch_mode=row.get("launch_mode", "exec"))
+    return Settings(launch_mode=row.get("launch_mode", "exec"), refresh_seconds=row.get("refresh_seconds", 60))
 
 
 def load() -> Settings:
@@ -77,7 +81,8 @@ def save(settings: Settings) -> None:
                       0o600, dir_fd=fd)
         try:
             with os.fdopen(out, "w") as stream:
-                json.dump({"schema": 1, "launch_mode": settings.launch_mode}, stream)
+                json.dump({"schema": 1, "launch_mode": settings.launch_mode,
+                           "refresh_seconds": settings.refresh_seconds}, stream)
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())

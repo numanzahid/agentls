@@ -84,3 +84,15 @@ def test_atomic_failure_keeps_old_preference(env, monkeypatch):
         settings.save(settings.Settings(launch_mode="suspend"))
     assert settings.load().launch_mode == "exec"
     assert [p.name for p in paths.cli_config_dir().iterdir()] == ["settings.json"]
+
+
+def test_refresh_interval_persists_and_defaults_for_old_files(env):
+    settings.save(settings.Settings(refresh_seconds=300))
+    assert settings.load() == settings.Settings(refresh_seconds=300)
+    target = paths.cli_config_dir() / "settings.json"
+    target.write_text(json.dumps({"schema": 1, "launch_mode": "suspend"}))  # written before the setting existed
+    assert settings.load() == settings.Settings(launch_mode="suspend", refresh_seconds=60)
+    for bad in (7, "60", True, -1):
+        target.write_text(json.dumps({"schema": 1, "refresh_seconds": bad}))
+        with pytest.raises(ValueError):
+            settings.load()
