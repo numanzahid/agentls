@@ -647,7 +647,7 @@ def test_process_delete_cancel_keeps_files(populated, monkeypatch, cancel):
         plan = trash.build_plan([target])
         calls = []
         monkeypatch.setattr(app, 'run_delete', lambda *args: calls.append(args))
-        app._confirm_process_delete(SimpleNamespace(process=SimpleNamespace(pid=42), deletion=plan))
+        app._confirm_process_delete(SimpleNamespace(process=SimpleNamespace(pid=42, argv=(b'codex', b'resume', CODEX_ID.encode())), deletion=plan))
         await pilot.pause()
         assert app.focused.id == 'cancel'
         assert '42' in app.screen.body.plain and target.selector in app.screen.body.plain
@@ -671,7 +671,7 @@ def test_process_delete_explicit_consent(populated, monkeypatch, confirm):
     async def scenario(app, pilot):
         target = app.by_key[f'codex:{CODEX_ID}']
         plan = trash.build_plan([target])
-        stop = SimpleNamespace(process=SimpleNamespace(pid=42), deletion=plan)
+        stop = SimpleNamespace(process=SimpleNamespace(pid=42, argv=(b'codex', b'resume', CODEX_ID.encode())), deletion=plan)
         calls = []
         monkeypatch.setattr(app, 'run_delete', lambda *args: calls.append(args))
         app._confirm_process_delete(stop)

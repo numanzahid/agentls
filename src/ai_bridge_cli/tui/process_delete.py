@@ -1,4 +1,4 @@
-"""Fail-closed, TUI-only consent to terminate one exclusive native Codex session.
+"""Fail-closed native process identity checks and legacy TUI stop/archive flow.
 
 No PID is signalled by number: Linux pidfds pin the checked process identity.
 Unsupported launch shapes and shared processes are deliberately refused.
@@ -34,7 +34,7 @@ class StopPlan:
 
 
 def inspect(pid: int, session) -> ProcessIdentity:
-    """Accept only an exclusive `codex resume UUID` native process owned by us."""
+    """Accept only an exclusive native resume of an exact session, owned by us."""
     if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
         raise UnsafePath('Safe process signalling is unavailable on this system.')
     if pid in activity._ancestors() or pid <= 1:
@@ -48,21 +48,23 @@ def inspect(pid: int, session) -> ProcessIdentity:
     if len(uid_line.split()) != 5 or any(int(uid) != os.geteuid() for uid in uid_line.split()[1:]):
         raise UnsafePath('Process user identities do not all match your account.')
     executable = (base / 'exe').stat()
-    binary = find_binary('codex')
+    binary = find_binary(session.agent)
     if not binary:
-        raise UnsafePath('Native Codex executable cannot be verified.')
+        raise UnsafePath('Native agent executable cannot be verified.')
     native = Path(binary).resolve()
     expected = native.stat()
     if ((executable.st_dev, executable.st_ino) != (expected.st_dev, expected.st_ino)
             or expected.st_mode & 0o022 or expected.st_uid not in (0, os.geteuid())):
-        raise UnsafePath('Process is not the verified native Codex executable.')
+        raise UnsafePath('Process is not the verified native agent executable.')
     with native.open('rb') as stream:
         if stream.read(4) != b'\x7fELF':
             raise UnsafePath('Wrapped or interpreted agent processes cannot be safely terminated.')
     argv = tuple((base / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0'))
-    if (len(argv) != 3 or Path(os.fsdecode(argv[0])).name != 'codex'
-            or argv[1:] != (b'resume', session.session_id.encode())):
-        raise UnsafePath('Cannot prove an exclusive Codex resume of this exact session; MCP and other launch modes are refused.')
+    expected_names = {'codex': ('codex',), 'claude': ('claude',), 'cursor': ('agent', 'cursor-agent')}[session.agent]
+    verb = b'resume' if session.agent == 'codex' else b'--resume'
+    if (len(argv) != 3 or Path(os.fsdecode(argv[0])).name not in expected_names
+            or argv[1:] != (verb, session.session_id.encode())):
+        raise UnsafePath('Cannot prove an exclusive native resume of this exact session; shared daemons and other launch modes are refused.')
     target = Path(session.storage_path).stat(follow_symlinks=False)
     inode = (target.st_dev, target.st_ino)
     opened = False

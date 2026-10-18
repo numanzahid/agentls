@@ -90,6 +90,8 @@ class SessionBrowser(App):
         Binding("n", "rename", "Rename"),
         Binding("a", "archive", "Archive"),
         Binding("d,delete", "delete", "Delete…"),
+        Binding("x", "stop_session", "Stop…", show=False),
+        Binding("D", "force_delete", "Force delete…", show=False),
         Binding("t", "trash", "Trash"),
         Binding("s", "cycle_sort", "Sort"),
         Binding("S", "reverse_sort", "Reverse sort", show=False),
@@ -803,6 +805,107 @@ class SessionBrowser(App):
         self.notify(f"{verb} {len(sessions)} session(s); files untouched.{hint}", markup=False)
         self._rebuild_table()
 
+    def action_stop_session(self) -> None:
+        if self.targets() and self._require_idle():
+            self.prepare_session_action(self.targets(), 'stop')
+
+    def action_force_delete(self) -> None:
+        if self.targets() and self._require_idle():
+            self.prepare_session_action(self.targets(), 'force')
+
+    @work(thread=True, exclusive=True, group='action')
+    def prepare_session_action(self, sessions: list[Session], action: str) -> None:
+        from .. import session_actions
+        try:
+            if action == 'stop':
+                plan = session_actions.prepare_stop(sessions)
+            elif all(s.agent == 'codex' for s in sessions):
+                plan = codex_delete.prepare_force(sessions)
+            else:
+                plan = session_actions.prepare_quarantine(sessions)
+        except Exception as error:
+            self.call_from_thread(self.notify, f'Action blocked: {one_line(str(error), 1200)}',
+                                  severity='error', markup=False, timeout=18)
+            self.call_from_thread(self.refresh_catalog)
+            return
+        self.call_from_thread(self._confirm_session_action, plan, action)
+
+    def _confirm_session_action(self, plan, action: str) -> None:
+        from .. import session_actions
+        native_force = isinstance(plan, codex_delete.ForcePlan)
+        stop = plan.stop if isinstance(plan, session_actions.QuarantinePlan) else plan
+        selected = plan.selected if native_force else stop.selected
+        affected = plan.affected if native_force else stop.affected
+        body = Text('Selected:\n' + '\n'.join(s.selector for s in selected) +
+                    '\n\nAffected sessions (including descendants/subagents):\n' +
+                    '\n'.join(s.selector for s in affected) + '\n\n')
+        if native_force:
+            body.append('Native command(s):\n' + '\n'.join(
+                f'{safe(plan.binary)} delete --force {s.session_id}' for s in plan.sessions))
+            body.append('\nCODEX_HOME: ' + safe(str(plan.root)) + '\n')
+            body.append('\n'.join(safe(p) for p in plan.processes) or 'No session process observed.')
+            if plan.inspection_note:
+                body.append('\nProcess visibility incomplete: ' + safe(plan.inspection_note))
+            body.append('\n\nIrreversible: no trash restore. Active work may be interrupted or lost. '
+                        'Native Codex owns thread cancellation, descendant deletion and reference checks; it may refuse. '
+                        'No shared daemon is killed. External background commands may remain; this is not a verified process stop. '
+                        'Multiple roots run sequentially; partial completion is possible.')
+        else:
+            for target in stop.targets:
+                body.append(target.session.selector + (f' · bridge job {target.job_id}' if target.job_id else '') + '\n')
+                body.append('\n'.join(safe(d) for d in target.details) + '\n')
+            if not stop.targets:
+                body.append('No verified live process found; nothing needs stopping.\n')
+            body.append('\nUnsaved work may be lost. Native exclusive processes receive SIGTERM with a bounded wait; '
+                        'no automatic SIGKILL. Shared daemons and unverifiable processes are refused. '
+                        'Known descendant sessions are included. Files remain after Stop session. '
+                        'Grouped actions may partially complete; refresh after any failure.')
+            if stop.bridge_cleanup:
+                body.append('\nBridge jobs use the installed server cancellation mechanism. A separate confirmation '
+                            'will authorize background descendant cleanup, which may escalate to SIGKILL under server policy.')
+            if action == 'force':
+                body.append('\nQuarantine paths:\n' + '\n'.join(safe(p) for p in plan.paths) + '\n')
+                body.append('\nAfter stopping, Claude/Cursor files move to recoverable quarantine only if every ordinary '
+                            'safeguard passes. Recent writes require waiting 120 seconds. Restore with t.')
+        title = 'Stop session?' if action == 'stop' else 'Force delete?'
+        screen = DeleteConfirmScreen(title, body, allowed=True)
+        def confirmed(ok):
+            if not ok:
+                return
+            if not native_force and stop.bridge_cleanup:
+                warning = Text('Authorize the installed server to stop these exact jobs and their verified background lineage:\n' +
+                               '\n'.join(t.session.selector + ' · job ' + t.job_id + '\n' +
+                                         '\n'.join(safe(d) for d in t.details) for t in stop.targets if t.job_id) +
+                               '\n\nServer cleanup may escalate to SIGKILL. Unsaved work can be lost. '
+                               'Shared daemons are refused. y authorizes this escalation; n cancels.')
+                self.push_screen(DeleteConfirmScreen('Confirm background cleanup / SIGKILL?', warning, allowed=True),
+                                 lambda yes: self.run_session_action(plan, action) if yes else None)
+            else:
+                self.run_session_action(plan, action)
+        self.push_screen(screen, confirmed)
+
+    @work(thread=True, exclusive=True, group='action')
+    def run_session_action(self, plan, action: str) -> None:
+        from .. import session_actions
+        try:
+            if isinstance(plan, codex_delete.ForcePlan):
+                removed = codex_delete.execute_force(plan)
+                message = f'Native Codex force deletion confirmed for {len(removed)} root(s).'
+            elif action == 'stop':
+                stopped = session_actions.execute_stop(plan)
+                message = f'Stopped {len(stopped)} session process/job(s); chat files retained.'
+            else:
+                result = session_actions.execute_quarantine(plan)
+                message = f"Quarantined {len(result['moved'])} session(s); restore with t."
+                if result['failed'] or result['skipped']:
+                    message += f" Partial outcome: {result['failed']}; blocked: {result['skipped']}"
+            self.call_from_thread(self.notify, message, markup=False, timeout=15)
+        except Exception as error:
+            self.call_from_thread(self.notify, f'Action outcome: {one_line(str(error), 1400)}',
+                                  severity='error', markup=False, timeout=20)
+        finally:
+            self.call_from_thread(self.refresh_catalog)
+
     def action_delete(self) -> None:
         sessions = self.targets()
         if not sessions or not self._require_idle():
@@ -835,6 +938,8 @@ class SessionBrowser(App):
                 self._set_archived(sessions, True)
             elif choice == "trash":
                 self._confirm_delete(plan)
+            elif choice in ("stop", "force"):
+                self.prepare_session_action(sessions, choice)
 
         note = '\n'.join(dict.fromkeys(warning for item in plan.items for warning in item.warnings))
         label = 'Native archive' if all(s.agent == 'codex' for s in sessions) else 'Delete'
@@ -848,6 +953,8 @@ class SessionBrowser(App):
                 self._set_archived([session], True)
             elif choice == 'trash':
                 self.prepare_permanent_delete(session)
+            elif choice in ('stop', 'force'):
+                self.prepare_session_action([session], choice)
         self.push_screen(RemoveScreen(f'Remove “{one_line(session.display_title, 60)}”?',
                                       native_label='Permanently delete', permanent=True), chosen)
 
@@ -864,7 +971,11 @@ class SessionBrowser(App):
 
     def _confirm_permanent_delete(self, plan: codex_delete.PermanentPlan) -> None:
         body = Text(f'Permanently delete codex:{plan.session.session_id}\n'
-                    f'CODEX_HOME: {safe(str(plan.root))}\n\n'
+                    f'CODEX_HOME: {safe(str(plan.root))}\n'
+                    'Affected sessions (including descendants/subagents):\n' +
+                    '\n'.join(s.selector for s in plan.affected) +
+                    f'\nCommand: {safe(plan.binary)} delete --force {plan.session.session_id}\n'
+                    'No verified live session processes (complete idle checks required).\n\n'
                     'This is irreversible. There is no trash restore. Descendant chats (including subagents) '
                     'may also be removed. Codex checks references and may refuse deletion.\n\n'
                     'y: Permanently delete   n / Escape: Cancel')
@@ -907,8 +1018,10 @@ class SessionBrowser(App):
         body = Text(f"Send SIGTERM to PID {process.pid} (native Codex), ending "
                     f"codex:{session.session_id} and interrupting its work, then archive "
                     "this chat with Codex. Unsaved work may be lost.")
-        screen = DeleteConfirmScreen("Kill process and delete?", body, allowed=True)
-        screen.confirm = Text("[y] Kill + delete")
+        body.append("\nCommand: " + safe(" ".join(os.fsdecode(a) for a in process.argv)) +
+                    "\nBlast radius: this exclusive session process only; no children or shared daemon. No SIGKILL.")
+        screen = DeleteConfirmScreen("Stop session and archive?", body, allowed=True)
+        screen.confirm = Text("[y] Stop + archive")
         screen.add_class("process-stop")
         self.push_screen(screen, lambda ok: self.run_delete(stop.deletion, stop) if ok else None)
 

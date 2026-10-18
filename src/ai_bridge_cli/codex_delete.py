@@ -1,7 +1,7 @@
 """TUI-only permanent deletion, delegated entirely to the native Codex CLI.
 
-No native files are written here. A plan is consent for one exact archived
-thread and its checked descendants; native thread/delete owns reference checks
+No native files are written here. Plans consent to exact session UUIDs
+and their checked descendants; native thread/delete owns reference checks
 and consistency. Every check is repeated after consent, with no risk override.
 """
 from __future__ import annotations
@@ -206,6 +206,7 @@ class PermanentPlan:
     root: Path
     binary: str
     fingerprint: str
+    affected: tuple[Session, ...] = ()
 
 
 def prepare(session: Session) -> PermanentPlan:
@@ -257,7 +258,7 @@ def prepare(session: Session) -> PermanentPlan:
                        [(e.path, e.identity) for e in item.entries]))
     fingerprint = hashlib.sha256(json.dumps((str(root), identity(root.stat()),
                                            identity(os.stat(binary)), indexed, proofs), sort_keys=True).encode()).hexdigest()
-    return PermanentPlan(session, root, binary, fingerprint)
+    return PermanentPlan(session, root, binary, fingerprint, tuple(related))
 
 
 def execute(plan: PermanentPlan) -> None:
@@ -267,8 +268,178 @@ def execute(plan: PermanentPlan) -> None:
         raise UnsafePath('Thread, descendants, binary or store changed since confirmation; retry.')
     _run([fresh.binary, 'delete', '--force', fresh.session.session_id], fresh.root)
     # A zero status alone does not establish success. Index and files must agree.
-    if any(s.session_id.lower() == fresh.session.session_id.lower() for s in _inventory(fresh.root)):
+    affected = {s.session_id.lower() for s in fresh.affected}
+    if any(s.session_id.lower() in affected for s in _inventory(fresh.root)):
         raise UnsafePath('Native Codex returned success but thread remains; outcome unconfirmed.')
-    indexed = _index(fresh.root, fresh.session.session_id, require_present=False)
-    if indexed:
+    if any(_index(fresh.root, sid, require_present=False) for sid in affected):
         raise UnsafePath('Native index still contains thread; outcome unconfirmed.')
+
+
+@dataclass(frozen=True)
+class ForcePlan:
+    sessions: tuple[Session, ...]
+    affected: tuple[Session, ...]
+    root: Path
+    binary: str
+    fingerprint: str
+    processes: tuple[str, ...]
+    inspection_note: str | None
+    selected: tuple[Session, ...]
+
+
+def prepare_force(sessions: list[Session]) -> ForcePlan:
+    """Consent to native session-scoped deletion, including active threads.
+
+    Live content is allowed to change. Consent pins UUIDs, storage inodes,
+    ancestry, index locations, executable and observed process identities.
+    Native thread/delete alone arbitrates busy threads and reference safety.
+    No process-inspection override is granted to filesystem deletion or signals.
+    """
+    if not sessions or any(s.agent != 'codex' or not is_uuid(s.session_id) or s.error for s in sessions):
+        raise UnsafePath('Native force deletion requires exact, readable Codex UUIDs.')
+    root = paths.codex_dir()
+    _safe_root(root)
+    binary = find_binary('codex')
+    if not binary:
+        raise UnsafePath('Native codex CLI not found. Install a Codex version supporting delete --force UUID.')
+    binary = os.path.abspath(binary)
+    help_text = _run([binary, 'delete', '--help'], root, timeout=10)
+    if not (re.search(r'Usage:\s+codex delete\b', help_text) and '<SESSION>' in help_text
+            and re.search(r'(?<![\w-])--force\b', help_text)):
+        raise UnsafePath('Installed Codex does not advertise delete <SESSION> and --force; update Codex.')
+    rows = _inventory(root)
+    selected = {s.session_id.lower(): s for s in sessions}
+    for sid, session in selected.items():
+        matches = [s for s in rows if s.session_id.lower() == sid]
+        if (Path(session.storage_root) != root or len(matches) != 1
+                or matches[0].storage_path != session.storage_path):
+            raise UnsafePath(f'{session.selector}: native session location changed or is ambiguous; refresh.')
+    affected = set(selected)
+    while True:
+        expanded = affected | {s.session_id.lower() for s in rows
+                               if (s.parent_session_id or '').lower() in affected}
+        if expanded == affected:
+            break
+        affected = expanded
+    related = sorted((s for s in rows if s.session_id.lower() in affected), key=lambda s: s.session_id)
+    if len(related) != len(affected):
+        raise UnsafePath('Ambiguous descendant UUIDs; refresh and inspect the native inventory.')
+    act = activity.snapshot()
+    state = BridgeState()
+    bridge_note = None
+    try:
+        jobs = state.session_jobs()
+        if state.problems:
+            bridge_note = 'Bridge job inventory incomplete; native Codex decides deletion safety.'
+    except (OSError, ValueError):
+        jobs = {}
+        bridge_note = 'Bridge job inventory unavailable; native Codex decides deletion safety.'
+    proofs, processes = [], set()
+    for row in related:
+        if row.error:
+            raise UnsafePath(f'{row.selector}: {row.error}')
+        storage_safe(row)
+        info = Path(row.storage_path).lstat()
+        if info.st_nlink != 1 or not not_writable_by_others(Path(row.storage_path), info):
+            raise UnsafePath(f'{row.selector}: hard-linked or shared-writable rollout refused.')
+        indexed = _index(root, row.session_id)
+        if indexed and indexed != [(row.session_id, row.storage_path, int(row.native_archived))]:
+            raise UnsafePath(f'{row.selector}: native index disagrees with rollout; refresh in Codex.')
+        key = info.st_dev, info.st_ino
+        pids = set(act.file_holders.get(key, ()))
+        if key in act.open_files:
+            pids.add(act.open_files[key])
+        if row.session_id.lower() in act.cmdline_ids:
+            pids.add(act.cmdline_ids[row.session_id.lower()])
+        observed, job_proofs = [], []
+        for job in jobs.get(('codex', row.session_id.lower()), []):
+            if job.get('status') not in ('running', 'cleanup_incomplete', 'lost'):
+                continue
+            view = state.job_view(job, detail=True)
+            recorded = [(view.get('runner_pid'), view.get('runner_identity_verified')),
+                        (view.get('target_pid'), view.get('target_identity_verified'))]
+            recorded.extend((d['pid'], d['identity_verified']) for d in view.get('observed_descendants', []))
+            job_proofs.append((job['id'], recorded))
+            for pid, verified in recorded:
+                if pid is None:
+                    continue
+                if verified:
+                    pids.add(pid)
+                processes.add(f"{row.selector}: bridge job {job['id']} · saved PID {pid} · " +
+                              ('verified live lineage' if verified else 'not verified live; never signalled by this action'))
+            if view.get('process_record') == 'unreadable':
+                bridge_note = 'Bridge process lineage unreadable; native Codex decides deletion safety.'
+        for pid in sorted(pids):
+            try:
+                cmd = one_line((activity.PROC / str(pid) / 'cmdline').read_bytes()
+                               .replace(b'\0', b' ').decode(errors='replace'), 1000)
+                start = activity.proc_start_ticks(pid)
+            except OSError:
+                cmd, start = '(command unavailable; native API decides safety)', None
+            processes.add(f'{row.selector}: PID {pid} · {cmd}')
+            observed.append((pid, start, cmd))
+        proofs.append((row.session_id, row.parent_session_id, row.storage_path, row.native_archived,
+                       (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink), indexed, observed, job_proofs))
+    fingerprint = hashlib.sha256(json.dumps((str(root), identity(os.stat(binary)),
+                                            (root.stat().st_dev, root.stat().st_ino), proofs),
+                                           sort_keys=True).encode()).hexdigest()
+    # Selected descendants are covered by their selected ancestor's native call.
+    parents = {s.session_id.lower(): (s.parent_session_id or '').lower() for s in related}
+    for sid in parents:
+        current, seen = sid, set()
+        while current in parents:
+            if current in seen:
+                raise UnsafePath('Cyclic native ancestry; deletion refused.')
+            seen.add(current)
+            current = parents[current]
+    roots = []
+    for sid, session in sorted(selected.items()):
+        parent, seen = parents.get(sid), {sid}
+        covered = False
+        while parent:
+            if parent in seen:
+                raise UnsafePath('Cyclic native ancestry; deletion refused.')
+            if parent in selected:
+                covered = True
+                break
+            seen.add(parent)
+            parent = parents.get(parent)
+        if not covered:
+            roots.append(session)
+    return ForcePlan(tuple(roots), tuple(related), root, binary, fingerprint,
+                     tuple(sorted(processes)), '; '.join(n for n in (act.incompleteness(), bridge_note) if n) or None,
+                     tuple(selected.values()))
+
+
+def execute_force(plan: ForcePlan) -> list[str]:
+    """Execute only after grouped confirmation; never kill a daemon or edit stores."""
+    fresh = prepare_force(list(plan.sessions))
+    if fresh.fingerprint != plan.fingerprint:
+        raise UnsafePath('Affected sessions, process identities, binary or native index changed; confirm a fresh preview.')
+    individual = [(s, prepare_force([s])) for s in fresh.sessions]
+    # Building per-root guards must not authorize changes since grouped consent.
+    if prepare_force(list(plan.sessions)).fingerprint != plan.fingerprint:
+        raise UnsafePath('Grouped native scope changed while preparing calls; confirm a fresh preview.')
+    removed = []
+    for session, expected in individual:
+        try:
+            if prepare_force([session]).fingerprint != expected.fingerprint:
+                raise UnsafePath('Native deletion scope changed; confirm a fresh preview.')
+            _run([fresh.binary, 'delete', '--force', session.session_id], fresh.root)
+            remaining = _inventory(fresh.root)
+            descendants = {session.session_id.lower()}
+            while True:
+                expanded = descendants | {s.session_id.lower() for s in plan.affected
+                                          if (s.parent_session_id or '').lower() in descendants}
+                if expanded == descendants:
+                    break
+                descendants = expanded
+            if any(s.session_id.lower() in descendants for s in remaining):
+                raise UnsafePath('Native Codex returned success but affected threads remain; outcome unconfirmed.')
+            if any(_index(fresh.root, sid, require_present=False) for sid in descendants):
+                raise UnsafePath('Native index still contains affected threads; outcome unconfirmed.')
+            removed.append(session.selector)
+        except (OSError, ValueError) as error:
+            raise UnsafePath(f'{error} Completed native roots: {", ".join(removed) or "none"}. '
+                             'Batch is not atomic; refresh before retrying.') from error
+    return removed

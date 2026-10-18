@@ -205,41 +205,70 @@ Codex rows label these choices **Hide** and **Native archive** to distinguish th
 Cancel has initial focus. Preflight runs before the modal and is checked again on execution.
 If any selected chat is blocked, none of the selection is deleted.
 
-**Permanently delete an already archived Codex chat (TUI only):** press `A` to show
-archived chats, select one row marked `[codex-archived]`, press `d`, then choose
-`d Permanently delete` (the `a Hide` choice only hides the row). A separate irreversible-deletion warning displays the full
-UUID and `CODEX_HOME`, and warns that descendant chats (including subagents) may
-also be removed. Only `y` or clicking **Permanently delete** confirms; `n`, Escape,
-or Enter on the initially focused **Cancel** cancels. Mixed/multiple selections
-are refused. An ordinary hidden chat is not eligible: it must already be natively
-archived, so ordinary unarchived Codex removal remains recoverable.
+**Stop session (`x`) and Force delete (`D`)** are independent actions in the browser.
+They are also available as `x Stop session` and `f Force delete` inside the `d` removal
+menu. Ordinary `d` removal remains recoverable. Each new action opens a separate
+warning with Cancel initially focused; `y` confirms, `n` or Escape cancels. The
+preview lists full selected and affected descendant/subagent IDs, bridge job IDs,
+known PIDs and commands, and warns of lost work. Settings and `?` show these keys.
+There is no setting that disables consent or permits a shared daemon kill.
 
-After confirmation, the tool rechecks the installed CLI's advertised
-`delete <SESSION>` and `--force`, the exact native archive location and index
-(when present), full UUID metadata, user ownership, file identities, descendants,
-bridge jobs, complete process inspection and startup state. Symlinks, traversal,
-recent writes and active/uncertain sessions are refused. The archive-specific
-stale-daemon-handle exemption is not extended to permanent deletion. It then runs
-`codex delete --force <full UUID>` in a separate subprocess with no shell, closed
-stdin, a timeout and bounded output. Native Codex owns consistency, descendants
-and reference checks; busy threads or unsafe references are reported as refusals.
-No shared daemon is stopped, no rollout is directly unlinked, and no SQLite rows
-are edited by ai-bridge-cli. The list is refreshed after errors as well as success;
-a timeout, failure or disagreement between the native result, index and files
-does not produce a success message. Permanent deletion has **no trash restore**.
-The headless `sessions delete` command continues to provide recoverable removal only.
+**Codex Force delete** accepts unarchived and archived chats, including active,
+recent and uncertain sessions. It checks installed `codex delete --help` for
+`delete <SESSION>` and `--force`, exact UUID metadata, storage ownership and
+permissions, unique rollout locations, native index agreement, descendant scope,
+executable identity and observed process identities. These are rechecked after
+confirmation. Live transcript writes are allowed; changes to affected identities
+or ancestry require a new preview. Incomplete process visibility is displayed;
+only the native session-scoped API is authorized to act in that case.
 
-Only when an exclusive native `codex resume UUID` process is the sole blocker can the TUI
-offer **Kill process and delete**. This separate confirmation names the PID and exact session
-and warns that work will be interrupted: `y` sends SIGTERM and then attempts native archive;
-`n`, Escape, or Enter on the initially focused Cancel cancels. The process must belong entirely
-to your account and match the installed native executable, start time and open rollout inode.
-Other open files (apart from standard terminal/pipe streams), sockets, children, shared holders,
-wrapped executables, MCP modes and multiple selections are refused. No SIGKILL is sent.
-After a bounded wait, the original deletion checks run again; changed files or remaining blockers
-stop deletion and are reported. Recent writes still require waiting until idle. The ordinary CLI
-preview/plan-ID flow is unchanged; there is no process-termination bypass flag.
-Blocked items cannot be confirmed.
+It invokes `codex delete --force UUID` with the configured `CODEX_HOME`, closed
+stdin, bounded output and timeout. Native Codex owns cancellation, references and
+index consistency and may refuse. This is **irreversible, with no trash restore**.
+No daemon is killed and no rollout or SQLite row is manually deleted. External
+background commands may remain; native deletion is not a verified process stop.
+Success requires affected rollout files and index entries to be absent. Multiple
+selected descendants are covered by their selected ancestor; independent roots
+run sequentially and can partially complete. The result reports completed roots
+on failure, and the catalog refreshes after every outcome.
+
+The existing archived-only permanent deletion path (`A`, archived Codex row,
+`d`, `d Permanently delete`) retains its stricter idle checks. Headless
+`sessions delete` continues to provide recoverable removal only.
+
+**Stop session** keeps chat files. Bridge-managed jobs use the installed server's
+validated `agents.stop` adapter, with private job and process-lineage records,
+saved boot/start identities and a verified installation. An additional confirmation
+lists those jobs and their known background lineage and explicitly authorizes
+server cleanup, including possible SIGKILL escalation under server policy. A
+cancellation request alone is not reported as a completed stop. The main MCP
+server code, configuration and service are never changed or restarted.
+
+Other native processes must be conclusively exclusive: the user-owned native ELF
+executable, exact `codex resume UUID`, `claude --resume UUID` or
+`agent`/`cursor-agent --resume UUID` command, saved start ticks, and the exact open
+session inode must agree. Other open files (apart from standard terminal/pipe
+streams), sockets, children, shared holders, wrapped/interpreted executables,
+MCP/daemon modes and incomplete inspection are refused. Linux pidfds pin the
+verified process before SIGTERM; a bounded wait follows. There is no automatic
+native SIGKILL. This intentionally excludes many ordinary wrapped or complex
+launches: close the named native client locally, then refresh. The tool never
+substitutes an arbitrary PID kill or shuts down all daemon clients.
+
+**Claude/Cursor Force delete** means verified stop followed by recoverable
+quarantine. All selected and known descendant sessions are previewed together.
+The ordinary filesystem, bridge, activity and recent-write guards still apply
+after stopping. Open or locked related files, including embedded Claude subagent
+transcripts and Cursor WAL files, also block quarantine. If cancellation flushes new writes, wait 120 seconds, refresh,
+and retry ordinary deletion. Mixed Codex/other-agent force selections are
+refused; select them separately. Unsupported identities remain blocked with an
+actionable explanation. An idle chat with no live process needs no stop.
+
+Ended `cleanup_incomplete` jobs are re-evaluated on each refresh using the saved
+runner, target and descendant boot/start identities. When that lineage is gone,
+the derived job becomes ended; independent live session evidence still wins.
+Missing/unreadable identities or live saved processes retain uncertainty. This
+refresh happens in memory and never rewrites server job records.
 
 An old rollout handle held by a **verified managed shared Codex app-server** can be
 treated as idle without stopping the daemon or using `--allow-uninspectable`.
@@ -274,9 +303,9 @@ guards a concurrent writer after the final check. No shared daemon is signalled.
 | --- | --- | --- |
 | Claude Code | The transcript `<id>.jsonl`, its `<id>/` sidecar folder (subagents, tool results), `file-history/<id>` and `session-env/<id>` are renamed into `~/.local/share/ai-bridge-cli/trash/<batch>/` with a manifest. | `trash restore` puts every path back and never overwrites. |
 | Cursor CLI | The chat folder (`store.db` with its WAL/SHM) and `projects/*/agent-transcripts/<id>` are moved the same way. | Same. |
-| Codex | Rollout files are indexed by Codex's SQLite state, so this tool **never moves or deletes them**. It runs the installed `codex archive <UUID>` after checking that `codex archive --help` advertises it. If not, delete is reported as unsupported. | `codex unarchive`, via `trash restore`. |
+| Codex | Rollout files are indexed by Codex's SQLite state, so this tool **never manually moves or deletes them**. It runs the installed `codex archive <UUID>` after checking that `codex archive --help` advertises it. If not, delete is reported as unsupported. | `codex unarchive`, via `trash restore`. |
 
-Delete refuses when any of these hold:
+Recoverable removal refuses when any of these hold:
 
 * the session is active, uncertain or recent, has unfinished bridge jobs, or anything in it was
   modified in the last 2 minutes;
@@ -296,8 +325,9 @@ Delete refuses when any of these hold:
   copy-then-delete;
 * the session ID is ambiguous.
 
-`trash purge BATCH --yes` permanently removes one fully resolved batch. It is the only real
-deletion, and only of data this tool moved. Purging leaves Codex items archived by Codex.
+`trash purge BATCH --yes` permanently removes one fully resolved batch, and only data
+this tool quarantined. Purging leaves Codex items archived by Codex. Native Codex
+Force delete is a separate irreversible operation, described above.
 
 If a preview says **Running processes cannot be fully inspected**, the checker cannot rule out
 open chat files; it has not proved that the selected chat is active. Linux can deny access to

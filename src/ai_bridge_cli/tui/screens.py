@@ -51,7 +51,9 @@ class RemoveScreen(Dialog):
 
     BINDINGS = [Binding("a", "choose('archive')", "Archive", priority=True),
                 Binding("d", "choose('trash')", "Delete", priority=True),
-                Binding("c", "cancel", "Cancel", priority=True)]
+                Binding("c", "cancel", "Cancel", priority=True),
+                Binding("x", "choose('stop')", "Stop session", priority=True),
+                Binding("f", "choose('force')", "Force delete", priority=True)]
 
     def __init__(self, title: str, note: str = '', native_label: str = 'Delete', permanent: bool = False):
         super().__init__()
@@ -71,6 +73,9 @@ class RemoveScreen(Dialog):
                 yield Button(Text("a Archive" if self.native_label == 'Delete' else "a Hide"), id="archive")
                 yield Button(Text("d " + self.native_label), id="trash")
                 yield Button(Text("c Cancel"), id="cancel")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("x Stop session"), id="stop")
+                yield Button(Text("f Force delete"), id="force")
 
     def on_mount(self) -> None:
         self.query_one("#cancel", Button).focus()
@@ -164,7 +169,8 @@ class SettingsScreen(ChoiceScreen):
             ("suspend", "B · Suspend browser and return afterwards",
              "Native CLI runs as a child; browser returns when it exits."),
         ], note=f"Current: {'A · exec' if mode == 'exec' else 'B · suspend'}\n"
-                f"Enter saves for this user · Esc cancels\n{safe(config_path)}")
+                f"Enter saves for this user · Esc cancels\n"
+                f"Session safety: x Stop · D Force delete · always confirm; no daemon kill or automatic native SIGKILL.\n{safe(config_path)}")
         self.mode = mode
 
     def on_mount(self) -> None:
@@ -212,7 +218,8 @@ class HelpScreen(Dialog):
                        ("Esc", "clear marks (in the list)")]),
         ("Actions", [("Enter / o", "open (resume) in the native CLI"), ("f", "fork (codex, claude)"),
                      ("n", "rename (display alias only)"), ("a", "archive / unarchive (hide; files untouched)"),
-                     ("d / Del", "remove: Codex archive; archived Codex → permanently delete (confirm y/n)"),
+                     ("d / Del", "remove choices: recoverable delete / Stop session / Force delete"),
+                     ("x / D", "Stop session / Force delete (separate confirmation)"),
                      ("t", "trash: restore or purge"), ("y", "copy agent:ID"), ("A", "show/hide archived"),
                      ("Ctrl+S / F2", "settings: close/exec native (default) or suspend and return"),
                      ("q", "quit")]),

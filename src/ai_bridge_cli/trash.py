@@ -147,7 +147,7 @@ def _inspect_dir(parent_fd: int, name: str) -> dict:
 
 
 def _check_entry(path: Path, root: Path, required: bool, now: float, trash_dev: int | None,
-                 quarantine: bool, blockers: list[str]) -> Entry | None:
+                 quarantine: bool, blockers: list[str], act: activity_mod.Activity | None = None) -> Entry | None:
     try:
         relative_parts(path, root)
         with pinned_parent(root, path) as (fd, name):
@@ -189,6 +189,14 @@ def _check_entry(path: Path, root: Path, required: bool, now: float, trash_dev: 
         # Stable wording: blocker text is part of the plan ID.
         blockers.append(f"Modified within the last {activity_mod.RECENT_SECONDS}s; "
                         f"wait until it is idle: {path.name}")
+    if quarantine and act is not None:
+        related = [(str(path), info.st_dev, info.st_ino)]
+        related.extend((str(path / e[0]), e[2], e[3]) for e in (tree or {}).get('entries', []))
+        for label, dev, ino in related:
+            if (dev, ino) in act.open_files:
+                blockers.append(f'In use: related session file {label} is open by PID {act.open_files[(dev, ino)]}.')
+            if (dev, ino) in act.locked:
+                blockers.append(f'In use: related session file {label} is locked.')
     if quarantine and trash_dev is not None and info.st_dev != trash_dev:
         blockers.append(f"On a different filesystem than the trash; refusing copy+delete: {path}")
     return Entry(path=str(path), root=str(root), required=required, kind=kind, identity=identity(info),
@@ -235,7 +243,7 @@ def _plan_item(session: Session, act: activity_mod.Activity, now: float, trash_d
     if os.path.realpath(root) != os.path.realpath(paths.agent_root(session.agent)):
         item.blockers.append("Session belongs to a different store than the configured one.")
     for path, required in _related(session):
-        entry = _check_entry(path, root, required, now, trash_dev, item.method == "quarantine", item.blockers)
+        entry = _check_entry(path, root, required, now, trash_dev, item.method == "quarantine", item.blockers, act)
         if entry:
             item.entries.append(entry)
     if item.method == "codex-archive" and not codex_permanent:

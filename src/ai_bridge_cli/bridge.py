@@ -89,6 +89,8 @@ class BridgeState:
         """Mirror the server's refresh logic without persisting anything."""
         meta = dict(meta)
         meta["status_derived"] = False
+        if meta.get("status") == "cleanup_incomplete":
+            return self._refresh_cleanup(meta)
         if meta.get("status") != "running":
             return meta
         job_id = meta["id"]
@@ -106,7 +108,7 @@ class BridgeState:
                 else:
                     meta["status"] = "done" if meta["exit_code"] == 0 else "failed"
                 meta["status_derived"] = True
-                return meta
+                return self._refresh_cleanup(meta) if meta["status"] == "cleanup_incomplete" else meta
             if exit_file.is_file() and not exit_file.is_symlink():
                 try:
                     meta["exit_code"] = int(exit_file.read_text().strip() or "-1")
@@ -127,6 +129,42 @@ class BridgeState:
                 meta["identity_state"] = "verified"
         else:
             meta["identity_state"] = "unverified_legacy"
+        return meta
+
+    def _refresh_cleanup(self, meta: dict) -> dict:
+        """Refresh ended lineage in memory; unreadable or missing proof stays uncertain.
+
+        Session activity is checked independently by the catalog and action plans.
+        A reused PID is not the saved process and must never be signalled.
+        """
+        if not meta.get("ended") or not meta.get("identity"):
+            return meta
+        try:
+            process = self._sidecar(meta["id"], "process")
+            if not process:
+                return meta
+            state = self._read(process, MAX_JOB_BYTES)
+            identities = [(meta.get("pid"), meta["identity"]),
+                          (state.get("pid"), state.get("identity"))]
+            identities.extend((state.get("descendants") or {}).items())
+            for pid, saved in identities:
+                if not isinstance(saved, dict) or not saved.get("start_ticks") or not saved.get("boot_id"):
+                    return meta
+                if saved["boot_id"] != BOOT_ID:
+                    continue
+                base = PROC / str(int(pid))
+                try:
+                    fields = (base / "stat").read_text().rsplit(") ", 1)[1].split()
+                except FileNotFoundError:
+                    if base.exists():
+                        return meta
+                    continue
+                if fields[0] not in ("Z", "X", "x") and fields[19] == str(saved["start_ticks"]):
+                    return meta
+            meta.update(status="done" if meta.get("exit_code") == 0 else "failed",
+                        status_derived=True, identity_state="ended_lineage_gone")
+        except (OSError, ValueError, TypeError, IndexError, AttributeError, UnsafePath):
+            pass
         return meta
 
     def _observed_session(self, meta: dict) -> str | None:
@@ -181,7 +219,7 @@ class BridgeState:
                 continue
             key = (info.st_ino, info.st_size, info.st_mtime_ns)
             hit = self._cache.get(stem)
-            if hit and hit[0] == key and hit[1].get("status") != "running":
+            if hit and hit[0] == key and not hit[1].get("status_derived") and hit[1].get("status") not in UNCERTAIN:
                 meta = hit[1]
             else:
                 try:
