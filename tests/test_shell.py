@@ -15,8 +15,9 @@ def test_shell_init_is_sourceable(capsys):
     assert subprocess.run(['bash', '-n'], input=source, text=True).returncode == 0
 
 
-@pytest.mark.parametrize('name', ['ai-bridge', 'ai-bridge-cli'])
-@pytest.mark.parametrize('mode', ['exec', 'fail', 'cancel', 'suspend'])
+# Both names share one shell helper; run every mode once and the alias once.
+@pytest.mark.parametrize('name,mode', [('ai-bridge', 'exec'), ('ai-bridge', 'fail'), ('ai-bridge', 'cancel'),
+                                       ('ai-bridge', 'suspend'), ('ai-bridge-cli', 'exec')])
 def test_real_shell_handoff(tmp_path, name, mode):
     project = tmp_path / "project ' $()\nwith newline\n"
     project.mkdir()

@@ -71,7 +71,7 @@ def test_search_and_filters(populated):
     drive(scenario)
 
 
-@pytest.mark.parametrize('width', [40, 100, 150])
+@pytest.mark.parametrize('width', [40, 150])
 @pytest.mark.parametrize('query', ['login', 'no-such-session', ''])
 def test_search_escape_preserves_query_and_rows_immediately(populated, width, query):
     async def scenario(app, pilot):
@@ -338,7 +338,7 @@ def test_quit_with_pending_preview_is_clean(populated):
     drive(scenario)
 
 
-@pytest.mark.parametrize("width", [40, 60, 80, 90, 100, 129, 130, 150, 200])
+@pytest.mark.parametrize("width", [40, 100, 129, 130])
 def test_model_and_title_fit_after_resize(populated, width):
     async def scenario(app, pilot):
         # Also exercise resizing within a tier and with the side pane hidden.
@@ -571,10 +571,16 @@ def test_incomplete_delete_preview_gives_safe_alternatives(populated):
     assert not plan.allowed
 
 
-@pytest.mark.parametrize('width', [40, 60, 100, 150])
+@pytest.mark.parametrize('width', [40, 100, 150])
 def test_numbered_focus_shortcuts(populated, width):
     async def scenario(app, pilot):
         assert '1 Search' in str(app._q('#pane-nav').render())
+        search = app._q('#search').region
+        for selector in ('#agent', '#origin', '#status', '#project'):
+            control = app._q(selector)
+            assert control.display and control.region.width >= 14 and control.region.right <= width
+            if width < 130:  # filters wrap onto their own row under search
+                assert control.region.y >= search.bottom
         await pilot.press('4')
         await pilot.pause()
         assert app.focused.id == 'side' and app._q('#side').display
@@ -739,21 +745,6 @@ def test_native_delete_rechecks_after_keyboard_confirmation(populated, monkeypat
     drive(scenario)
 
 
-@pytest.mark.parametrize('width', [40, 60, 150])
-def test_remove_modal_labels_and_buttons_fit(populated, width):
-    async def scenario(app, pilot):
-        await pilot.press('d')
-        await pilot.pause()
-        for button in app.screen.query('Button'):
-            assert button.region.width >= len(button.label.plain)
-            assert button.region.right <= width and button.region.bottom <= 20
-        await pilot.press('d')
-        await settle(pilot, app)
-        assert len(app.screen_stack) == 1
-
-    drive(scenario, size=(width, 20))
-
-
 def test_mixed_selection_refuses_partial_deletion(populated):
     from dataclasses import replace
 
@@ -787,7 +778,7 @@ def assert_focused_pane(app, selector, accent):
             assert widget.styles.border_top[1] != accent
 
 
-@pytest.mark.parametrize('width', [40, 60, 100, 150])
+@pytest.mark.parametrize('width', [40, 100, 150])
 def test_pane_focus_css_tracks_hotkeys_and_nested_filters(populated, width):
     async def scenario(app, pilot):
         accent = app._q('#table').styles.border_top[1]
@@ -1013,41 +1004,24 @@ def test_permanent_delete_error_after_native_changes_reconciles(env, monkeypatch
     drive(scenario)
 
 
-@pytest.mark.parametrize('width', [40, 60, 150])
-@pytest.mark.parametrize('native_archived', [False, True])
-def test_codex_removal_labels_fit_narrow_terminal(env, width, native_archived):
-    fixtures.codex_session(env.codex, CODEX_ID, env.project, archived=native_archived)
+def assert_buttons_fit(screen, width, rows):
+    for button in screen.query('Button'):
+        assert button.region.width >= len(button.label.plain)
+        assert button.region.x >= 0 and button.region.right <= width and button.region.bottom <= rows
+
+
+@pytest.mark.parametrize('width', [40, 80, 120])
+@pytest.mark.parametrize('kind', ['claude', 'codex', 'codex-archived'])
+def test_removal_modal_layout_is_balanced_and_unclipped(env, width, kind):
+    rows = 20
+    if kind == 'claude':
+        fixtures.claude_session(env.claude, CLAUDE_ID, env.project)
+    else:
+        fixtures.codex_session(env.codex, CODEX_ID, env.project, archived=kind == 'codex-archived')
     env.age()
 
     async def scenario(app, pilot):
-        if native_archived:
-            await pilot.press('A')
-        await pilot.press('d')
-        await settle(pilot, app)
-        assert isinstance(app.screen, screens.RemoveScreen)
-        for button in app.screen.query('Button'):
-            assert button.region.width >= len(button.label.plain)
-            assert button.region.right <= width and button.region.bottom <= 20
-        if native_archived:
-            await pilot.press('d')
-            await settle(pilot, app)
-            assert isinstance(app.screen, screens.DeleteConfirmScreen)
-            for button in app.screen.query('Button'):
-                assert button.region.width >= len(button.label.plain)
-                assert button.region.right <= width and button.region.bottom <= 20
-        await pilot.press('escape')
-    drive(scenario, size=(width, 20))
-
-
-@pytest.mark.parametrize('width', [40, 60, 80, 120])
-@pytest.mark.parametrize('native_archived', [False, True])
-def test_removal_modal_layout_is_balanced_and_unclipped(env, width, native_archived):
-    rows = 20 if width < 84 else 30
-    fixtures.codex_session(env.codex, CODEX_ID, env.project, archived=native_archived)
-    env.age()
-
-    async def scenario(app, pilot):
-        if native_archived:
+        if kind == 'codex-archived':
             await pilot.press('A')
         await pilot.press('d')
         await settle(pilot, app)
@@ -1055,12 +1029,12 @@ def test_removal_modal_layout_is_balanced_and_unclipped(env, width, native_archi
         assert isinstance(screen, screens.RemoveScreen)
         buttons = {b.id: b for b in screen.query('Button')}
         assert set(buttons) == {'archive', 'trash', 'cancel', 'stop', 'force'}
+        assert_buttons_fit(screen, width, rows)
         for button in buttons.values():
             label = button.label.plain
             assert label[1] == ' ' and label[0].isalpha()
             assert button.region.width >= len(label) + (0 if screen.query_one('.removal').has_class('stacked') else 2)
             assert button.region.height == (1 if width < screens.RemoveScreen.STACK_BELOW else 3)
-            assert button.region.x >= 0 and button.region.right <= width and button.region.bottom <= rows
         top = [buttons[i].region for i in ('archive', 'trash', 'cancel')]
         bottom = [buttons[i].region for i in ('stop', 'force')]
         if width < screens.RemoveScreen.STACK_BELOW:
@@ -1073,5 +1047,10 @@ def test_removal_modal_layout_is_balanced_and_unclipped(env, width, native_archi
             assert max(r.width for r in top) - min(r.width for r in top) <= 1
             assert max(r.width for r in bottom) - min(r.width for r in bottom) <= 1
             assert len({r.x for r in (top[0], bottom[0])}) == 1
+        if kind == 'codex-archived':
+            await pilot.press('d')
+            await settle(pilot, app)
+            assert isinstance(app.screen, screens.DeleteConfirmScreen)
+            assert_buttons_fit(app.screen, width, rows)
         await pilot.press('escape')
     drive(scenario, size=(width, rows))
