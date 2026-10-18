@@ -5,7 +5,7 @@ import os
 
 import fixtures
 import pytest
-from conftest import CLAUDE_ID, CODEX_ID, CURSOR_ID
+from conftest import CLAUDE_ID, CODEX_CHILD, CODEX_ID, CURSOR_ID
 
 from ai_bridge_cli import native, settings
 from ai_bridge_cli.tui import screens
@@ -38,10 +38,13 @@ def keys(app):
 
 def test_lists_all_sessions_with_details(populated):
     async def scenario(app, pilot):
-        assert len(app.shown) == 4 and app.query_one("#table").row_count == 4
+        # The Codex child is an exec chat: hidden by the default Interactive mode filter.
+        assert len(app.shown) == 3 and app.query_one("#table").row_count == 3
+        assert f"codex:{CODEX_CHILD}" not in keys(app)
         assert app.current() is not None
-        status = str(app.query_one("#statusbar").render())
-        assert "4/4 sessions" in status
+        status = app.query_one("#table")._border_subtitle
+        assert status.plain == "1 non-interactive · 1 of 3"
+        assert "dim" in str(status.spans[0].style)  # hidden: dim; shown: bold
         assert app.query_one("#side").display  # wide: details beside the table
     drive(scenario)
 
@@ -59,7 +62,7 @@ def test_search_and_filters(populated):
         assert keys(app) == [f"claude:{CLAUDE_ID}"]
         await pilot.press("slash", "ctrl+u", "escape")
         await pilot.pause()
-        assert len(app.shown) == 4 and app.focused.id == "table"
+        assert len(app.shown) == 3 and app.focused.id == "table"
         app.query_one("#agent").value = "codex"
         await pilot.pause()
         assert {s.agent for s in app.shown} == {"codex"}
@@ -68,6 +71,26 @@ def test_search_and_filters(populated):
         await pilot.pause()
         assert app.shown == [] and app.query_one("#empty").display
         assert "No sessions match" in str(app.query_one("#empty").render())
+    drive(scenario)
+
+
+def test_mode_filter_marks_and_toggles_noninteractive_chats(populated):
+    child = f"codex:{CODEX_CHILD}"
+
+    async def scenario(app, pilot):
+        assert child not in keys(app)
+        app.query_one("#mode").value = "include"
+        await pilot.pause()
+        assert child in keys(app) and len(app.shown) == 4
+        title = app.query_one("#table").get_cell(child, "title").plain
+        assert title.startswith("⚙ ")
+        assert not app.query_one("#table").get_cell(f"claude:{CLAUDE_ID}", "title").plain.startswith("⚙")
+        app.query_one("#mode").value = "only"
+        await pilot.pause()
+        assert keys(app) == [child]
+        app.query_one("#mode").value = "hide"
+        await pilot.pause()
+        assert child not in keys(app)
     drive(scenario)
 
 
@@ -83,7 +106,7 @@ def test_search_escape_preserves_query_and_rows_immediately(populated, width, qu
         elif query:
             assert expected == []
         else:
-            assert len(expected) == 4
+            assert len(expected) == 3
         for _ in range(2):
             await pilot.press('escape')
             assert app.focused is table and table.display
@@ -99,7 +122,7 @@ def test_explicit_search_clear_from_middle_of_query(populated, clear_keys):
         await pilot.press('slash', *'login', 'left', 'left', *clear_keys)
         assert app.focused.id == 'search'
         assert app._q('#search').value == app.query_state.search == ''
-        assert len(app.shown) == app._q('#table').row_count == 4
+        assert len(app.shown) == app._q('#table').row_count == 3
     drive(scenario)
 
 
@@ -112,7 +135,7 @@ def test_three_types_in_search_then_navigates_outside_input(populated):
         assert app.focused.id == 'search'
         assert app._q('#search').value == app.query_state.search == '3'
         expected = keys(app)
-        assert expected and len(expected) < 4
+        assert expected and len(expected) < 3
         await pilot.press('escape', '4', '3')
         assert app.focused.id == 'table'
         assert app._q('#search').value == '3' and keys(app) == expected
@@ -164,19 +187,19 @@ def test_mark_and_archive_many_then_show_archived(populated):
         assert len(app.marked) == 2
         await pilot.press("a")
         await pilot.pause()
-        assert len(app.shown) == 2 and not app.marked
+        assert len(app.shown) == 1 and not app.marked
         data = json.loads((populated.cli_state / "overlays.json").read_text())
         assert sum(1 for r in data["sessions"].values() if r.get("archived")) == 2
         await pilot.press("A")
         await pilot.pause()
-        assert len(app.shown) == 4
+        assert len(app.shown) == 3
     drive(scenario)
 
 
 def test_mark_all_toggles(populated):
     async def scenario(app, pilot):
         await pilot.press("asterisk")
-        assert len(app.marked) == 4
+        assert len(app.marked) == 3
         await pilot.press("asterisk")
         assert not app.marked
     drive(scenario)
@@ -202,7 +225,7 @@ def test_remove_archive_shortcut(populated):
         assert isinstance(app.screen, screens.RemoveScreen)
         await pilot.press("a")
         await pilot.pause()
-        assert len(app.shown) == 3
+        assert len(app.shown) == 2
     drive(scenario)
 
 
@@ -261,10 +284,27 @@ def test_open_refusal_is_reported_not_launched(populated, monkeypatch):
     drive(scenario)
 
 
+def test_list_position_counter_and_thin_scrollbar(populated):
+    from ai_bridge_cli.tui.scrollbar import ThinScrollBarRender
+
+    async def scenario(app, pilot):
+        table = app.query_one("#table")
+        assert table._border_subtitle.plain.endswith(" · 1 of 3")
+        assert [str(c.label) for c in table.columns.values()][3:5] == ["Updated↓", "Status"]  # sort arrow
+        await pilot.press("down")
+        await settle(pilot, app)
+        assert table._border_subtitle.plain.endswith(" · 2 of 3")
+        keys = str(app.query_one("#keybar").render())
+        assert keys.startswith("Quit: q | Help: ? | ") and "Delete: d | " in keys
+    drive(scenario)
+    bar = ThinScrollBarRender.render_bar(size=10, virtual_size=40, window_size=10, position=30)
+    assert "".join(seg.text for seg in bar.segments) == " " * 8 + "▐" * 2  # thumb at the end, no track
+
+
 def test_narrow_terminal_layout(populated):
     async def scenario(app, pilot):
         assert app.tier == "narrow" and not app.query_one("#side").display
-        assert [c.value for c in app.query_one("#table").columns] == ["mark", "agent", "title", "model", "updated"]
+        assert [c.value for c in app.query_one("#table").columns] == ["mark", "agent", "title", "project"]
         await pilot.press("p")
         await settle(pilot, app)
         assert app.query_one("#side").display and not app.query_one("#table").display
@@ -324,7 +364,7 @@ def test_background_updates_while_a_modal_is_open(populated):
         await pilot.pause(0.3)
         await settle(pilot, app)
         assert isinstance(app.screen, screens.HelpScreen)
-        assert app._q("#table").row_count == 4
+        assert app._q("#table").row_count == 3
         await pilot.press("escape")
         await pilot.press("down")
         await settle(pilot, app)
@@ -347,11 +387,14 @@ def test_model_and_title_fit_after_resize(populated, width):
         table = app.query_one("#table")
         columns = {key.value: col for key, col in table.columns.items()}
         assert columns["title"].width >= 10
-        assert str(columns["model"].label) == "Last Model"
         assert table.virtual_size.width <= table.size.width
-        assert table.get_cell(f"claude:{CLAUDE_ID}", "model").plain == "claude-test-1"
-        assert table.get_cell(f"codex:{CODEX_ID}", "model").plain == "gpt-test"
-        assert table.get_cell(f"cursor:{CURSOR_ID}", "model").plain == "—"
+        # Last Model and Updated drop before Project when space runs out.
+        assert ("model" in columns) == (width == 129) and ("project" in columns) == (width > 40)
+        if "model" in columns:
+            assert str(columns["model"].label) == "Last Model"
+            assert table.get_cell(f"claude:{CLAUDE_ID}", "model").plain == "claude-test-1"
+            assert table.get_cell(f"codex:{CODEX_ID}", "model").plain == "gpt-test"
+            assert table.get_cell(f"cursor:{CURSOR_ID}", "model").plain == "—"
         if app.tier == "wide":
             await pilot.press("p")
             await settle(pilot, app)
@@ -377,7 +420,7 @@ def test_details_show_full_model_and_unknown(env, model):
         values = grid.columns[1]._cells
         assert values[labels.index("Last Model")].plain == (model or "—")
         assert app.query_one("#table").get_cell(f"claude:{CLAUDE_ID}", "model").plain == (model or "—")
-    drive(scenario)
+    drive(scenario, size=(200, 30))
 
 
 @pytest.mark.parametrize("shortcut", ["ctrl+s", "f2"])
@@ -574,9 +617,9 @@ def test_incomplete_delete_preview_gives_safe_alternatives(populated):
 @pytest.mark.parametrize('width', [40, 100, 150])
 def test_numbered_focus_shortcuts(populated, width):
     async def scenario(app, pilot):
-        assert '1 Search' in str(app._q('#pane-nav').render())
+        assert not app.query('#pane-nav') and app.theme == 'ansi-dark'
         search = app._q('#search').region
-        for selector in ('#agent', '#origin', '#status', '#project'):
+        for selector in ('#agent', '#mode', '#origin', '#status', '#project'):
             control = app._q(selector)
             assert control.display and control.region.width >= 14 and control.region.right <= width
             if width < 130:  # filters wrap onto their own row under search
@@ -783,16 +826,19 @@ def test_pane_focus_css_tracks_hotkeys_and_nested_filters(populated, width):
     async def scenario(app, pilot):
         accent = app._q('#table').styles.border_top[1]
         assert_focused_pane(app, '#table', accent)
-        for selector, title in (('#search', '1 Search'), ('#filter-controls', '2 Filters'),
-                                ('#table', '3 Session List'), ('#side', '4 Preview/Details')):
-            assert app._q(selector).border_title == title
+        for selector, title in (('#search', '[1]-Search'), ('#filter-controls', '[2]-Filters'),
+                                ('#table', '[3]-Session List'), ('#side', '[4]-Preview/Details')):
+            assert app._q(selector).border_title.startswith(title)
+        table = app._q('#table')
+        if width > 40:  # count right-aligned in the top border, which it fills exactly
+            assert table.border_title.endswith(' 3/4 sessions') and len(table.border_title) == table.outer_size.width - 6
         await pilot.press('1')
         await pilot.pause()
         assert_focused_pane(app, '#search', accent)
         await pilot.press('enter', '2')
         await pilot.pause()
         assert_focused_pane(app, '#filter-controls', accent)
-        for selector in ('#agent', '#origin', '#status', '#project'):
+        for selector in ('#agent', '#mode', '#origin', '#status', '#project'):
             control = app._q(selector)
             assert control.region.width > 0 and control.region.bottom <= 24
             await pilot.press('enter')
@@ -848,29 +894,28 @@ def test_pane_focus_css_tracks_clicks_without_marking_rows(populated, width):
 
 @pytest.mark.parametrize('width', [40, 150])
 def test_selected_count_stays_prominent_and_separate_from_pane_focus(populated, width):
-    from rich.console import Console
 
     async def scenario(app, pilot):
         accent = app._q('#table').styles.border_top[1]
         await pilot.press('space', 'space')
         await pilot.pause()
-        status = app._q('#statusbar').content
-        assert status.plain.startswith(' 2 selected / 4 visible ')
-        assert status.get_style_at_offset(Console(), 1).reverse
+        status = app._q('#table')._border_subtitle
+        assert status.plain.startswith(' 2 selected ')
+        assert 'reverse' in str(status.spans[0].style)
         assert_focused_pane(app, '#table', accent)
         marked = set(app.marked)
         await pilot.press('1')
         await pilot.pause()
         assert_focused_pane(app, '#search', accent)
-        assert app.marked == marked and app._q('#statusbar').content.plain == status.plain
+        assert app.marked == marked and app._q('#table')._border_subtitle.plain == status.plain
         # Filter down to a marked row: count only the visible action targets.
         target = app.by_key[next(iter(marked))]
         app._q('#search').value = target.session_id
         await pilot.pause()
-        assert app._q('#statusbar').content.plain.startswith(' 1 selected / 1 visible ')
+        assert app._q('#table')._border_subtitle.plain.startswith(' 1 selected ')
         await pilot.press('escape', 'escape')
         await pilot.pause()
-        assert not app.marked and 'selected' not in app._q('#statusbar').content.plain
+        assert not app.marked and 'selected' not in app._q('#table')._border_subtitle.plain
         assert_focused_pane(app, '#table', accent)
     drive(scenario, size=(width, 24))
 
@@ -1054,3 +1099,20 @@ def test_removal_modal_layout_is_balanced_and_unclipped(env, width, kind):
             assert_buttons_fit(app.screen, width, rows)
         await pilot.press('escape')
     drive(scenario, size=(width, rows))
+
+
+def test_preview_shows_last_user_messages_and_last_reply_only(populated):
+    from ai_bridge_cli.tui.app import conversation_preview
+
+    msgs = ([{"role": "user", "text": f"ask {i}"} for i in range(7)]
+            + [{"role": "tool", "text": "ls -la"}, {"role": "assistant", "text": "first"},
+               {"role": "tool", "text": "cat x"}, {"role": "assistant", "text": "final answer"}])
+    picked = conversation_preview(msgs)
+    assert [m["text"] for m in picked] == ["ask 2", "ask 3", "ask 4", "ask 5", "ask 6", "final answer"]
+
+    async def scenario(app, pilot):
+        app._render_preview(app.current(), picked)
+        text = app.query_one("#preview").content.plain
+        assert text.startswith("Your last 5 messages") and "Last reply\n\nfinal answer" in text
+        assert "ls -la" not in text and "ask 1" not in text
+    drive(scenario)

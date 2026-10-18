@@ -21,8 +21,10 @@ from textual import on, work
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.content import Content
 from textual.css.query import NoMatches
-from textual.widgets import DataTable, Footer, Header, Input, Select, Static
+from textual.scrollbar import ScrollBar
+from textual.widgets import DataTable, Input, Select, Static
 
 from .. import codex_delete, native, paths, settings, trash
 from ..catalog import Catalog, Query
@@ -30,6 +32,7 @@ from ..model import SORT_KEYS, Session
 from ..output import relative
 from ..scanners import history
 from ..textsafe import one_line, safe
+from .scrollbar import ThinScrollBarRender
 from .screens import (ConfirmScreen, DeleteConfirmScreen, HelpScreen, InputScreen, RemoveScreen,
                       SettingsScreen, TrashScreen)
 
@@ -39,7 +42,7 @@ STATUS_STYLE = {"active": "bold green", "uncertain": "bold yellow", "recent": "c
 STATUS_ICON = {"active": "●", "uncertain": "◐", "recent": "○", "idle": "·"}
 ORIGIN_LABEL = {"mcp": ("MCP", "bold magenta"), "direct": ("Direct", ""), "unknown": ("Unknown", "dim")}
 AUTO_REFRESH_SECONDS = 20
-PREVIEW_MESSAGES = 40
+PREVIEW_USER_MESSAGES = 5  # the preview shows these plus the agent's last reply; no tool output
 WIDE, MEDIUM = 130, 90
 
 
@@ -70,6 +73,43 @@ class SearchInput(Input):
 
     def action_clear_query(self) -> None:
         self.value = ""
+
+
+def conversation_preview(messages: list[dict]) -> list[dict]:
+    """The last few user messages, then the agent's last reply after them; tool output is left out."""
+    user_indexes = [i for i, m in enumerate(messages) if m.get("role") == "user"][-PREVIEW_USER_MESSAGES:]
+    picked = [messages[i] for i in user_indexes]
+    reply = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+    if reply is not None:
+        picked.append(reply)
+    return picked
+
+
+class KeyBar(Static):
+    """lazygit-style options line: "Open: o | Rename: n | ..." in one color; replaces Footer."""
+
+    def on_mount(self) -> None:
+        self.screen.bindings_updated_signal.subscribe(self, lambda _screen: self._render_keys())
+        self._render_keys()
+
+    def on_unmount(self) -> None:
+        self.screen.bindings_updated_signal.unsubscribe(self)
+
+    def _render_keys(self) -> None:
+        seen, items = set(), []
+        for _, binding, enabled, _ in self.screen.active_bindings.values():
+            if binding.show and enabled and binding.action not in seen:
+                seen.add(binding.action)
+                items.append(f"{binding.description.rstrip('…. ')}: {self.app.get_key_display(binding)}")
+        self.update(Text(" | ".join(items), no_wrap=True, overflow="ellipsis"))
+
+
+class SessionTable(DataTable):
+    def on_resize(self) -> None:
+        self.app._update_status()  # the top-border count is laid out for this width
+
+
+ScrollBar.renderer = ThinScrollBarRender  # lazygit-style thin thumb, no track
 
 
 class SessionBrowser(App):
@@ -108,7 +148,7 @@ class SessionBrowser(App):
         self.catalog = catalog or Catalog()
         self.periodic_refresh = periodic_refresh
         self.probe_activity = probe_activity
-        self.query_state = Query()
+        self.query_state = Query(noninteractive="hide")  # exec / -p chats via the Mode filter
         self.by_key: dict[str, Session] = {}
         self.shown: list[Session] = []
         self.marked: set[str] = set()
@@ -145,13 +185,13 @@ class SessionBrowser(App):
 
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("1 Search · 2 Filters · 3 Session List · 4 Preview/Details · 5 Settings", id="pane-nav")
         with Horizontal(id="filters"):
             yield SearchInput(placeholder="Search title, project, ID, model…  ( / )", id="search")
             with Horizontal(id="filter-controls"):
                 yield Select([("All agents", "all"), ("Claude Code", "claude"), ("Codex", "codex"),
                               ("Cursor", "cursor")], value="all", allow_blank=False, id="agent", compact=True)
+                yield Select([("Interactive", "hide"), ("All modes", "include"), ("Non-interactive", "only")],
+                             value="hide", allow_blank=False, id="mode", compact=True)
                 yield Select([("Any origin", "all"), ("MCP (bridge)", "mcp"), ("Direct", "direct"),
                               ("Unknown", "unknown")], value="all", allow_blank=False, id="origin", compact=True)
                 yield Select([("Any status", "all"), ("Active", "active"), ("Uncertain", "uncertain"),
@@ -159,18 +199,18 @@ class SessionBrowser(App):
                              compact=True)
                 yield Select([("All projects", "all")], value="all", allow_blank=False, id="project", compact=True)
         with Horizontal(id="body"):
-            yield DataTable(id="table", cursor_type="row", zebra_stripes=True)
+            yield SessionTable(id="table", cursor_type="row")
             with VerticalScroll(id="side"):
                 yield Static(id="details")
                 yield Static(id="preview")
         yield Static(Text("Scanning sessions…"), id="empty")
-        yield Static(id="statusbar")
-        yield Footer()
+        yield KeyBar(id="keybar")
 
     def on_mount(self) -> None:
-        for selector, title in (("#search", "1 Search"), ("#filter-controls", "2 Filters"),
-                                ("#table", "3 Session List"), ("#side", "4 Preview/Details")):
-            self._q(selector).border_title = title
+        self.theme = "ansi-dark"  # terminal palette, like lazygit: follows the terminal theme (e.g. Omarchy)
+        for selector, title in (("#search", "[1]-Search"), ("#filter-controls", "[2]-Filters"),
+                                ("#side", "[4]-Preview/Details")):
+            self._q(selector).border_title = Content(title)  # plain text: brackets are not markup
         if self.settings_error:
             self.notify(self.settings_error, severity="warning", markup=False, timeout=15)
         self._q("#table", DataTable).focus()
@@ -267,20 +307,30 @@ class SessionBrowser(App):
 
     # -- table --------------------------------------------------------------
     def _columns(self) -> list[tuple[str, str, int | None]]:
-        width = self.size.width - 2  # Session list border; widths below describe its content.
+        width = self.size.width  # the side pane's 38% is of the full width
         if self.tier == "wide" and self.details_open:
-            width -= max(40, int(width * 0.38))
-        # Keep the title and model before secondary metadata. Reserve the gutter
-        # and padding explicitly so the title never falls off-screen.
+            width -= max(40, int(width * 0.38))  # side pane; borders touch, no gap
+        width -= 2  # Session list border; widths below describe its content.
+        # The title always shows; optional columns are kept in priority order (Last
+        # Model and Updated drop first) while the title keeps 20 cells. Reserve the
+        # gutter and padding explicitly so the title never falls off-screen.
         compact = self.tier == "narrow"
-        cols = [("mark", " ", 1), ("agent", "Ag" if compact else "Agent", 2 if compact else 6)]
-        model_width = min(28, max(10, width // 5))
-        cols += [("title", "Title", 0), ("model", "Last Model", model_width)]
-        for column in [("updated", "Updated", 8), ("status", "Status", 9),
-                       ("origin", "Origin", 7), ("project", "Project", 22)]:
-            used = sum(c[2] + 2 for c in cols) + column[2] + 2 + 2
-            if width - used >= 20:
-                cols.append(column)
+        cols = [("mark", " ", 1), ("agent", "Ag" if compact else "Agent", 3 if compact else 6), ("title", "Title", 0)]
+        optional = [("project", "Project", 22), ("status", "Status", 2 if compact else 9),
+                    ("origin", "Origin", 7), ("updated", "Updated", 8),
+                    ("model", "Last Model", min(28, max(10, width // 5)))]
+        kept = []
+        for key, label, size in optional:
+            spare = width - sum(c[2] + 2 for c in cols + kept) - 2 - 20  # room left after a 20-cell title
+            if key == "project":
+                size = min(size, spare - 2)  # Project shrinks before anything else is shown
+                if size < 10:
+                    break
+            if spare < size + 2:
+                break  # strict priority: nothing lower shows while a higher column is hidden
+            kept.append((key, label, size))
+        order = ["model", "updated", "status", "origin", "project"]
+        cols += sorted(kept, key=lambda c: order.index(c[0]))
         used = sum(c[2] + 2 for c in cols) + 2
         cols[2] = ("title", "Title", max(1, width - used))
         return cols
@@ -310,6 +360,8 @@ class SessionBrowser(App):
             tags.append(("[codex-archived] ", "italic dim"))
         if s.error:
             tags.append(("⚠ ", "bold red"))
+        if s.mode == "noninteractive":
+            tags.append(("⚙ ", "dim"))
         if s.session_type == "subagent":
             tags.append(("↳ ", "dim"))
         title = Text.assemble(*tags, (one_line(s.display_title, 300), "italic" if s.alias else ""))
@@ -328,7 +380,10 @@ class SessionBrowser(App):
         now = time.time()
         with self.batch_update():
             table.clear(columns=True)
+            arrow = "↑" if self.query_state.reverse else "↓"
             for key, label, width in columns:
+                if key == self.query_state.sort:  # sort shown as an arrow on its column
+                    label += arrow
                 table.add_column(Text(label, style="bold"), key=key, width=width)
             for s in self.shown:
                 table.add_row(*(self._cell(s, key, now) for key, _, _ in columns), key=s.selector)
@@ -373,28 +428,39 @@ class SessionBrowser(App):
                               "Esc clears the search; set filters back to All/Any.", style="dim"))
 
     def _update_status(self) -> None:
+        """Status in the list's bottom border, lazygit style, ending in "N of M".
+
+        Archived and non-interactive counts are bright when shown and dim when hidden.
+        """
         q = self.query_state
-        marked = len(self.marked & {s.selector for s in self.shown})
-        arrow = "↑" if q.reverse else "↓"
-        parts = ([Text(f" {marked} selected / {len(self.shown)} visible ", style="bold yellow reverse")]
-                 if marked else [Text(f"{len(self.shown)}/{len(self.by_key)} sessions", style="bold")])
-        parts.append(Text(f"sort {q.sort}{arrow}"))
-        if q.archived != "hide":
-            parts.append(Text("showing archived", style="italic"))
-        else:
-            hidden = sum(1 for s in self.by_key.values() if s.archived or s.native_archived)
-            if hidden:
-                parts.append(Text(f"{hidden} archived hidden (A)", style="dim"))
-        state = self.catalog.provenance_state
-        parts.append(Text("provenance ok" if state == "ok" else f"provenance {state}",
-                          style="" if state == "ok" else "dim"))
-        if self.catalog.errors:
-            parts.append(Text("⚠ " + ", ".join(self.catalog.errors), style="bold red"))
-        if self.last_error:
-            parts.append(Text("⚠ refresh failed", style="bold red"))
+        table = self._q("#table", DataTable)
+        parts: list[tuple[str, str]] = []
         if self.scanning:
-            parts.append(Text("scanning…", style="italic cyan"))
-        self._q("#statusbar", Static).update(Text(" · ").join(parts))
+            parts.append(("scanning…", "italic"))
+        if self.catalog.errors:
+            parts.append(("⚠ " + ", ".join(self.catalog.errors), "bold red"))
+        if self.last_error:
+            parts.append(("⚠ refresh failed", "bold red"))
+        marked = len(self.marked & {s.selector for s in self.shown})
+        if marked:
+            parts.append((f" {marked} selected ", "bold yellow reverse"))
+        archived = sum(1 for s in self.by_key.values() if s.archived or s.native_archived)
+        if archived:
+            parts.append((f"{archived} archived", "dim" if q.archived == "hide" else "bold"))
+        headless = sum(1 for s in self.by_key.values() if s.mode == "noninteractive")
+        if headless:
+            parts.append((f"{headless} non-interactive", "dim" if q.noninteractive == "hide" else "bold"))
+        if table.row_count:
+            parts.append((f"{table.cursor_row + 1} of {table.row_count}", ""))
+        pieces: list = []
+        for i, part in enumerate(parts):
+            pieces += [" · "] * bool(i) + [part]
+        table.border_subtitle = Content.assemble(*pieces)
+        # Top border: title on the left, "shown/total sessions" on the right. A border has one
+        # title, so the gap is filled with border lines (titles use the border color).
+        title, count = "[3]-Session List", f"{len(self.shown)}/{len(self.by_key)} sessions"
+        fill = table.outer_size.width - 6 - len(title) - len(count) - 2  # corners, edge lines, spaces
+        table.border_title = Content(f"{title} {'─' * fill} {count}" if fill > 0 else title)
 
     # -- selection & preview ------------------------------------------------
     def _current_key(self) -> str | None:
@@ -420,6 +486,7 @@ class SessionBrowser(App):
 
     @on(DataTable.RowHighlighted, "#table")
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
+        self._update_status()
         self._schedule_preview()
 
     @on(DataTable.RowSelected, "#table")
@@ -462,7 +529,7 @@ class SessionBrowser(App):
     @work(thread=True, exclusive=True, group="preview")
     def load_preview(self, session: Session, cache_key: tuple) -> None:
         try:
-            messages: list[dict] | str = history(session)[-PREVIEW_MESSAGES:]
+            messages: list[dict] | str = conversation_preview(history(session))
         except Exception as error:
             messages = f"Preview unavailable: {type(error).__name__}: {error}"
         self.call_from_thread(self._preview_loaded, session, cache_key, messages)
@@ -520,16 +587,18 @@ class SessionBrowser(App):
             preview.update(Text("No messages in this session.", style="dim"))
             return
         out = Text()
-        out.append(f"Last {len(messages)} messages\n", style="bold underline")
+        users = [m for m in messages if m.get("role") == "user"]
+        if users:
+            out.append(f"Your last {len(users)} message{'s' * (len(users) > 1)}\n", style="bold underline")
         for message in messages:
-            role = message.get("role", "?")
-            style = {"user": "bold cyan", "assistant": "bold green", "tool": "dim"}.get(role, "")
+            if message.get("role") == "assistant":
+                out.append("\nLast reply\n", style="bold underline")
             text = str(message.get("text", ""))
-            limit = 240 if role == "tool" else 1200
+            limit = 1200 if message.get("role") == "assistant" else 400
             body = "\n".join(safe(line) for line in text[:limit].replace("\r", "").split("\n"))
             body += "…" if len(text) > limit else ""
-            out.append(f"\n{role}: ", style=style)
-            out.append(body, style="dim" if role == "tool" else "")
+            out.append("\n› " if message.get("role") == "user" else "\n", style="bold cyan")
+            out.append(body)
             out.append("\n")
         preview.update(out)
 
@@ -546,7 +615,9 @@ class SessionBrowser(App):
     @on(Select.Changed)
     def _filter(self, event: Select.Changed) -> None:
         value = None if event.value in ("all", Select.BLANK) else event.value
-        if event.select.id == "agent":
+        if event.select.id == "mode":
+            self.query_state.noninteractive = event.value if event.value in ("include", "only") else "hide"
+        elif event.select.id == "agent":
             self.query_state.agents = (value,) if value else ()
         elif event.select.id == "origin":
             self.query_state.origin = value

@@ -31,13 +31,36 @@ Digits type normally inside search and other inputs; press `Enter` or `Esc` firs
 ## Layout
 
 * **Wide (130+ columns):** details beside the list; search and filters on one row.
-* **Medium (90–129):** filters on their own row under search; details toggle full screen.
+* **Medium (90–129):** filters on their own rows under search, three per line; details toggle
+  full screen.
 * **Narrow (<90):** filters two per line, short agent names, fewer columns.
 
-The focused pane's border is highlighted. When rows are marked, the status bar shows
-**N selected / N visible**: the sessions an action will affect.
+When the list is short of space, columns drop in this order: Last Model, Updated, Origin, Status,
+Project (which first shrinks to 10 columns). A column never shows while one before it in that
+order is hidden. Title always shows. The sort column's header carries an arrow (`Updated↓`).
+
+The list's top border shows **shown/total sessions**. Its bottom border shows, from left to right:
+scanning or error notes, **N selected** (the visible marked rows an action will affect), the
+archived and non-interactive counts (bright when shown, dim when filtered out), and the cursor
+position (`2 of 30`).
+
+Colors come from the terminal's 16-color palette, so the browser follows your terminal theme
+(Omarchy included), like lazygit. The focused pane's border is highlighted.
+
+The details pane ends with a short preview: your last 5 messages and the agent's last reply.
+Tool calls and their output are left out; open the chat for the full history.
+
+## Filters
+
+Agent, Mode, Origin, Status and Project. **Mode** defaults to **Interactive**, which hides
+non-interactive chats (`codex exec`, `claude -p`); the list's bottom border counts them.
+Choose **All modes** or **Non-interactive** to show them. Subagents take their parent's mode.
+Cursor CLI records no launch mode, so its chats always show. The headless `sessions list` is
+unfiltered by default; use `--mode`.
 
 ## Columns
+
+**Title** marks non-interactive chats with `⚙` and subagents with `↳`.
 
 **Last Model** is the most recently recorded model: Claude assistant messages (no sidechains or
 placeholders), Codex turn contexts, Cursor's `lastUsedModel`. `—` means unknown; agent defaults

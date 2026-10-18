@@ -251,6 +251,8 @@ class HelpScreen(Dialog):
             ("Direct", "bold"), " no record · ", ("Unknown", "dim"), " cannot verify\n",
             ("Status  ", "bold"), ("active", "green"), " in use · ", ("uncertain", "yellow"),
             " bridge job unverifiable · ", ("recent", "cyan"), " modified <2 min · idle\n",
+            ("Title  ", "bold"), ("⚙", "dim"), " non-interactive (codex exec, claude -p) chat, hidden by default; "
+            "change with Filters → Mode · ", ("↳", "dim"), " subagent\n",
             ("Last Model  ", "bold"), "last known model recorded in this chat; — = unknown. "
             "Full value in details (p); configured defaults are never substituted.")
         with Vertical(classes="box wide"):

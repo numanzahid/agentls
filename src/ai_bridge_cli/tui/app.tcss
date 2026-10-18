@@ -2,40 +2,54 @@ Screen {
     layout: vertical;
 }
 
-#pane-nav {
-    height: auto;
-    padding: 0 1;
-    color: $text-muted;
+/* lazygit-style scrollbars: one column, a half-block thumb and no track (see scrollbar.py). */
+* {
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $foreground;
+    scrollbar-color-hover: $accent;
+    scrollbar-color-active: $accent;
+    scrollbar-background: transparent;
+    scrollbar-background-hover: transparent;
+    scrollbar-background-active: transparent;
 }
 
-#filters {
+/* Every pane: same round border, full terminal width; borders touch with no gap, as in lazygit. */
+#filters, #body {
     height: auto;
-    padding: 0 1;
-    background: $boost;
 }
 
 #search {
     width: 1fr;
     min-width: 20;
-    border: tall $primary 40%;
+    height: 3;
+    padding: 0 1;
+    border: round $foreground;
 }
 
 #filter-controls {
     width: auto;
     height: auto;
-    border: round $primary 40%;
-    margin-left: 1;
+    border: round $foreground;
+}
+
+/* No fills on the main screen: panes, controls and bars sit on the terminal background. */
+#search, #search:focus, #filter-controls, #table, #side, #keybar,
+#filters Select > SelectCurrent, #table > .datatable--header {
+    background: transparent;
 }
 
 #search, #filter-controls, #table, #side {
-    border-title-color: $text-muted;
+    border-title-color: $foreground;  /* same as the border: the list title fills it with lines */
     border-title-align: left;
+    border-subtitle-color: $text-muted;
+    border-subtitle-align: right;
 }
 
 #search:focus-within, #filter-controls:focus-within, #table:focus-within, #side:focus-within {
     border: round $accent;
     border-title-color: $accent;
     border-title-style: bold;
+    border-subtitle-color: $accent;
 }
 
 #filters Select {
@@ -44,18 +58,22 @@ Screen {
     margin-top: 0;
 }
 
-#filters #project {
-    width: 28;
+#filters #agent {
+    margin-left: 0;
 }
 
-/* Below the wide tier, filters stay visible on their own row under search. */
+#filters #project {
+    width: 24;
+}
+
+/* Below the wide tier, filters stay visible on their own rows under search. */
 .narrow #filters, .medium #filters {
     layout: vertical;
 }
 
 .narrow #filter-controls, .medium #filter-controls {
     layout: grid;
-    grid-size: 4;
+    grid-size: 3;
     grid-gutter: 0 1;
     grid-rows: 1;
     width: 1fr;
@@ -81,14 +99,14 @@ Screen {
     width: 1fr;
     height: 1fr;
     scrollbar-gutter: stable;
-    border: round $primary 40%;
+    border: round $foreground;
 }
 
 #side {
     width: 38%;
     min-width: 40;
     height: 1fr;
-    border: round $primary 40%;
+    border: round $foreground;
     padding: 0 1;
 }
 
@@ -99,7 +117,7 @@ Screen {
 #details {
     margin-bottom: 1;
     padding-bottom: 1;
-    border-bottom: solid $primary 30%;
+    border-bottom: solid $foreground;
 }
 
 #empty {
@@ -109,10 +127,11 @@ Screen {
     color: $text-muted;
 }
 
-#statusbar {
+/* lazygit's optionsTextColor: the whole key line in the theme's blue. */
+#keybar {
     height: 1;
     padding: 0 1;
-    background: $panel;
+    color: $primary;
 }
 
 /* -- dialogs ---------------------------------------------------------- */
