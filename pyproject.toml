@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-bridge-cli"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Terminal browser and manager for local Claude Code, Codex and Cursor CLI sessions, with optional ai-bridge integration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,6 +29,10 @@ test = ["pytest>=8"]
 [project.scripts]
 ai-bridge = "ai_bridge_cli.cli:main"
 ai-bridge-cli = "ai_bridge_cli.cli:main"
+
+# Single source of truth: ai_bridge_cli.__version__ (see "Releasing" in README.md).
+[tool.setuptools.dynamic]
+version = { attr = "ai_bridge_cli.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
