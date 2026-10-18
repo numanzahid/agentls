@@ -1037,3 +1037,41 @@ def test_codex_removal_labels_fit_narrow_terminal(env, width, native_archived):
                 assert button.region.right <= width and button.region.bottom <= 20
         await pilot.press('escape')
     drive(scenario, size=(width, 20))
+
+
+@pytest.mark.parametrize('width', [40, 60, 80, 120])
+@pytest.mark.parametrize('native_archived', [False, True])
+def test_removal_modal_layout_is_balanced_and_unclipped(env, width, native_archived):
+    rows = 20 if width < 84 else 30
+    fixtures.codex_session(env.codex, CODEX_ID, env.project, archived=native_archived)
+    env.age()
+
+    async def scenario(app, pilot):
+        if native_archived:
+            await pilot.press('A')
+        await pilot.press('d')
+        await settle(pilot, app)
+        screen = app.screen
+        assert isinstance(screen, screens.RemoveScreen)
+        buttons = {b.id: b for b in screen.query('Button')}
+        assert set(buttons) == {'archive', 'trash', 'cancel', 'stop', 'force'}
+        for button in buttons.values():
+            label = button.label.plain
+            assert label[1] == ' ' and label[0].isalpha()
+            assert button.region.width >= len(label) + (0 if screen.query_one('.removal').has_class('stacked') else 2)
+            assert button.region.height == (1 if width < screens.RemoveScreen.STACK_BELOW else 3)
+            assert button.region.x >= 0 and button.region.right <= width and button.region.bottom <= rows
+        top = [buttons[i].region for i in ('archive', 'trash', 'cancel')]
+        bottom = [buttons[i].region for i in ('stop', 'force')]
+        if width < screens.RemoveScreen.STACK_BELOW:
+            assert screen.query_one('.removal').has_class('stacked')
+            assert len({r.width for r in top + bottom}) == 1
+            assert len({r.x for r in top + bottom}) == 1
+        else:
+            assert not screen.query_one('.removal').has_class('stacked')
+            assert len({r.y for r in top}) == 1 and len({r.y for r in bottom}) == 1
+            assert max(r.width for r in top) - min(r.width for r in top) <= 1
+            assert max(r.width for r in bottom) - min(r.width for r in bottom) <= 1
+            assert len({r.x for r in (top[0], bottom[0])}) == 1
+        await pilot.press('escape')
+    drive(scenario, size=(width, rows))

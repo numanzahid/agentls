@@ -55,6 +55,8 @@ class RemoveScreen(Dialog):
                 Binding("x", "choose('stop')", "Stop session", priority=True),
                 Binding("f", "choose('force')", "Force delete", priority=True)]
 
+    STACK_BELOW = 84
+
     def __init__(self, title: str, note: str = '', native_label: str = 'Delete', permanent: bool = False):
         super().__init__()
         self.title_text = title
@@ -64,21 +66,31 @@ class RemoveScreen(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(classes="box removal" + (" codex-removal" if self.native_label != 'Delete' else '')):
             yield Label(Text(self.title_text), classes="box-title")
-            yield Static(Text("Archive hides chats. Permanent deletion is irreversible; a separate warning follows."
+            yield Static(Text("Permanent deletion is irreversible; a separate warning follows."
                               if self.permanent else
-                              "Archive hides chats; native removal is restorable."))
+                              "Hiding or native removal is restorable."), classes="removal-help")
             if self.note:
                 yield Static(Text(safe(self.note), style='yellow'))
-            with Horizontal(classes="buttons"):
+            yield Label("Remove", classes="group-title")
+            with Horizontal(classes="buttons removal-row"):
                 yield Button(Text("a Archive" if self.native_label == 'Delete' else "a Hide"), id="archive")
                 yield Button(Text("d " + self.native_label), id="trash")
                 yield Button(Text("c Cancel"), id="cancel")
-            with Horizontal(classes="buttons"):
+            yield Label("Running session", classes="group-title")
+            with Horizontal(classes="buttons removal-row"):
                 yield Button(Text("x Stop session"), id="stop")
                 yield Button(Text("f Force delete"), id="force")
 
     def on_mount(self) -> None:
         self.query_one("#cancel", Button).focus()
+        self._fit(self.app.size.width)
+
+    def on_resize(self, event) -> None:
+        self._fit(event.size.width)
+
+    def _fit(self, width: int) -> None:
+        # Too narrow for side-by-side buttons: stack them compactly so no label wraps.
+        self.query_one(".removal").set_class(width < self.STACK_BELOW, "stacked")
 
     def action_choose(self, choice: str) -> None:
         self.dismiss(choice)

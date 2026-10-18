@@ -190,6 +190,32 @@ Screen {
     padding: 0;
 }
 
+.removal .group-title {
+    color: $text-muted;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.removal .removal-row {
+    align-horizontal: left;
+    margin-top: 0;
+}
+
+.removal .removal-row Button {
+    text-wrap: nowrap;
+    text-overflow: clip;
+}
+
+.removal.stacked .removal-row {
+    layout: vertical;
+}
+
+.removal.stacked .removal-row Button {
+    width: 100%;
+    height: 1;
+    border: none;
+}
+
 .process-stop #cancel {
     width: 12;
 }
@@ -199,12 +225,8 @@ Screen {
     padding: 1;
 }
 
-.codex-removal #archive {
-    width: 6;
-}
-
-.codex-removal #cancel {
-    width: 8;
+.codex-removal {
+    width: 84;
 }
 
 .permanent-delete #cancel {
