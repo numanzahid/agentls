@@ -133,3 +133,24 @@ def test_store_errors_do_not_hide_other_agents(populated, monkeypatch):
     monkeypatch.setattr(cursor, "chat_dirs", lambda root=None: (_ for _ in ()).throw(RuntimeError("boom")))
     c = catalog()
     assert "cursor" in c.errors and c.get("claude", CLAUDE_ID)
+
+
+def test_noninteractive_filter_and_subagent_mode_inheritance(env):
+    exec_parent, guardian = "01a00000-0000-7000-8000-000000000003", "01a00000-0000-7000-8000-000000000004"
+    fixtures.codex_session(env.codex, CODEX_ID, env.project, source="cli")
+    fixtures.codex_session(env.codex, exec_parent, env.project, source="exec")
+    # Subagent rows record no launch mode; they inherit their parent's.
+    fixtures.codex_session(env.codex, CODEX_CHILD, env.project, source={"subagent": {"other": "guardian"}},
+                           parent=CODEX_ID)
+    fixtures.codex_session(env.codex, guardian, env.project, source={"subagent": {"other": "guardian"}},
+                           parent=exec_parent)
+    env.age()
+    c = catalog()
+    modes = {s.session_id: s.mode for s in c.sessions}
+    assert modes == {CODEX_ID: "interactive", CODEX_CHILD: "interactive",
+                     exec_parent: "noninteractive", guardian: "noninteractive"}
+    assert set(ids(c.query(Query()))) == set(modes)
+    assert set(ids(c.query(Query(noninteractive="hide")))) == {CODEX_ID, CODEX_CHILD}
+    assert set(ids(c.query(Query(noninteractive="only")))) == {exec_parent, guardian}
+    with pytest.raises(ValueError):
+        c.query(Query(noninteractive="sometimes"))

@@ -27,6 +27,7 @@ class Query:
     search: str = ""
     archived: str = "hide"          # hide | include | only
     native_archived: bool = False   # include Codex sessions archived via `codex archive`
+    noninteractive: str = "include"  # hide | include | only: exec / `claude -p` chats
     sort: str = "updated"
     reverse: bool = False
 
@@ -41,6 +42,8 @@ class Query:
             raise ValueError(f"Unknown sort key; choose from {', '.join(SORT_KEYS)}.")
         if self.archived not in ("hide", "include", "only"):
             raise ValueError("archived must be hide, include or only.")
+        if self.noninteractive not in ("hide", "include", "only"):
+            raise ValueError("noninteractive must be hide, include or only.")
         return self
 
 
@@ -52,6 +55,20 @@ def _sort_key(name: str):
     if name == "project":
         return lambda s: ((s.cwd or "￿").casefold(), -s.updated)
     return lambda s: -s.updated
+
+
+def _inherit_modes(sessions: list[Session]) -> None:
+    """Subagents record no launch mode of their own; they run in their parent's."""
+    parents = {s.key: s for s in sessions}
+    for s in sessions:
+        seen, parent = {s.key}, s
+        while parent.mode == "unknown" and parent.parent_session_id:
+            parent = parents.get((parent.agent, parent.parent_session_id))
+            if parent is None or parent.key in seen:
+                break
+            seen.add(parent.key)
+        if parent is not None and parent is not s and s.mode == "unknown":
+            s.mode = parent.mode
 
 
 @dataclass
@@ -75,6 +92,7 @@ class Catalog:
         self.warnings = []
         self.scan_seconds = result.seconds
         sessions = result.sessions
+        _inherit_modes(sessions)
         try:
             own = self.overlays.load()
         except Exception as error:  # defensive: never lose the listing over overlays
@@ -180,6 +198,9 @@ class Catalog:
             if s.native_archived and not q.native_archived:
                 continue
             if q.archived == "hide" and s.archived or q.archived == "only" and not s.archived:
+                continue
+            headless = s.mode == "noninteractive"
+            if q.noninteractive == "hide" and headless or q.noninteractive == "only" and not headless:
                 continue
             if q.origin and s.origin != q.origin:
                 continue
