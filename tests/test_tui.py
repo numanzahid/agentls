@@ -105,6 +105,9 @@ def test_explicit_search_clear_from_middle_of_query(populated, clear_keys):
 
 def test_three_types_in_search_then_navigates_outside_input(populated):
     async def scenario(app, pilot):
+        # A numbered pytest project path may itself contain "3", matching every row.
+        for session in app.catalog.sessions:
+            session.cwd = '/fixture/project'
         await pilot.press('slash', '3')
         assert app.focused.id == 'search'
         assert app._q('#search').value == app.query_state.search == '3'
