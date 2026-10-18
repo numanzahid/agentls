@@ -13,15 +13,17 @@ Process tests start real child processes, so run the suite outside restrictive s
 
 ## Releasing
 
-Every release that is pushed or installed gets a new version. The version lives only in
+Every build installed for testing gets a new plain version number (`0.3.0`, then `0.3.1`, …), so
+`ai-bridge --version` always tells builds apart. A release is the tested number pushed to `main`;
+numbers that were never pushed are simply skipped. The version lives only in
 `src/ai_bridge_cli/__init__.py` (`__version__`); `pyproject.toml` reads it from there.
 
 1. Pick the next version ([SemVer](https://semver.org); below 1.0, bump the minor version for
    features or behavior changes and the patch version for fixes only).
 2. Set `__version__` in `src/ai_bridge_cli/__init__.py`.
 3. Run the tests and ruff check above.
-4. Commit the bump on its own: `Release X.Y.Z`.
-5. Tag and push: `git tag -a vX.Y.Z -m "ai-bridge-cli X.Y.Z"`, then `git push origin main vX.Y.Z`.
-6. Install from the tagged checkout: `bash install.sh --dry-run`, then `bash install.sh`.
-7. Verify: `ai-bridge --version` and `ai-bridge-cli --version` print `X.Y.Z`, and
+4. Commit the bump on its own (`Release X.Y.Z`) and push `main`. Releases are not tagged; the
+   version in `main` is the release.
+5. Install from that checkout: `bash install.sh --dry-run`, then `bash install.sh`.
+6. Verify: `ai-bridge --version` and `ai-bridge-cli --version` print `X.Y.Z`, and
    `bash install.sh --status` shows both launchers owned by ai-bridge-cli.
